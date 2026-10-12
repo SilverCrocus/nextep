@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::api::{self, Card, LibraryView, Stats};
 use crate::app::{Poster, nav};
+use crate::lists::ListsPanel;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Group {
@@ -13,16 +14,19 @@ enum Group {
     OnHold,
     Dropped,
     Watchlist,
+    /// Trakt lists; shown by [`ListsPanel`] rather than as a poster grid.
+    Lists,
 }
 
 impl Group {
-    const ALL: [Group; 6] = [
+    const ALL: [Group; 7] = [
         Group::Watching,
         Group::UpToDate,
         Group::OnHold,
         Group::Dropped,
         Group::Finished,
         Group::Watchlist,
+        Group::Lists,
     ];
 
     fn label(self) -> &'static str {
@@ -33,10 +37,11 @@ impl Group {
             Group::OnHold => "On hold",
             Group::Dropped => "Dropped",
             Group::Watchlist => "Watchlist",
+            Group::Lists => "Lists",
         }
     }
 
-    fn cards(self, view: &LibraryView) -> &Vec<Card> {
+    fn cards(self, view: &LibraryView) -> &[Card] {
         match self {
             Group::Watching => &view.watching,
             Group::UpToDate => &view.up_to_date,
@@ -44,6 +49,7 @@ impl Group {
             Group::OnHold => &view.on_hold,
             Group::Dropped => &view.dropped,
             Group::Watchlist => &view.watchlist,
+            Group::Lists => &[],
         }
     }
 }
@@ -116,11 +122,11 @@ pub fn Library() -> impl IntoView {
                 let chips = Group::ALL
                     .into_iter()
                     .map(|g| {
-                        let count = g.cards(&v).len();
+                        let count = (g != Group::Lists).then(|| g.cards(&v).len());
                         view! {
                             <button class="chip" class:active=move || group.get() == g on:click=move |_| group.set(g)>
                                 {g.label()}
-                                <span class="count">{count}</span>
+                                {count.map(|n| view! { <span class="count">{n}</span> })}
                             </button>
                         }
                     })
@@ -129,7 +135,10 @@ pub fn Library() -> impl IntoView {
                 view! {
                     <div class="chips">{chips}</div>
                     {move || {
-                        let cards = group.get().cards(&v2).clone();
+                        if group.get() == Group::Lists {
+                            return view! { <ListsPanel/> }.into_any();
+                        }
+                        let cards = group.get().cards(&v2).to_vec();
                         if cards.is_empty() {
                             return view! { <p class="hint">"Nothing here."</p> }.into_any();
                         }

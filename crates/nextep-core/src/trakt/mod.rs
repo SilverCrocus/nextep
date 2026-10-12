@@ -17,8 +17,8 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::models::{
-    CalendarEntry, HiddenShow, HistoryEntry, SearchResult, Season, Show, ShowProgress, UserStats,
-    WatchedShow, WatchlistShow,
+    CalendarEntry, HiddenShow, HistoryEntry, ListedShow, SearchResult, Season, Show, ShowProgress,
+    TraktList, UserSettings, UserStats, WatchedShow, WatchlistShow,
 };
 use crate::{Error, Result};
 
@@ -221,6 +221,54 @@ impl TraktClient {
         self.post(&path, shows_body(show_trakt_id)).await
     }
 
+    // ---- lists ------------------------------------------------------------
+
+    pub async fn my_lists(&self) -> Result<Vec<TraktList>> {
+        send_json(self.authed(Method::GET, "/users/me/lists")?).await
+    }
+
+    /// New lists are private.
+    pub async fn create_list(&self, name: &str) -> Result<TraktList> {
+        let body = json!({ "name": name, "privacy": "private" });
+        let res = self
+            .write(Method::POST, "/users/me/lists", Some(&body))
+            .await?;
+        Ok(res.json().await?)
+    }
+
+    pub async fn rename_list(&self, list_id: u64, name: &str) -> Result<()> {
+        let body = json!({ "name": name });
+        let path = format!("/users/me/lists/{list_id}");
+        self.write(Method::PUT, &path, Some(&body)).await.map(drop)
+    }
+
+    pub async fn delete_list(&self, list_id: u64) -> Result<()> {
+        let path = format!("/users/me/lists/{list_id}");
+        self.write(Method::DELETE, &path, None).await.map(drop)
+    }
+
+    pub async fn list_shows(&self, list_id: u64) -> Result<Vec<ListedShow>> {
+        let path = format!("/users/me/lists/{list_id}/items/show?extended=full&limit=all");
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn add_to_list(&self, list_id: u64, show_trakt_id: u64) -> Result<()> {
+        let path = format!("/users/me/lists/{list_id}/items");
+        self.post(&path, shows_body(show_trakt_id)).await
+    }
+
+    pub async fn remove_from_list(&self, list_id: u64, show_trakt_id: u64) -> Result<()> {
+        let path = format!("/users/me/lists/{list_id}/items/remove");
+        self.post(&path, shows_body(show_trakt_id)).await
+    }
+
+    /// How many personal lists the account may have (12 on free accounts).
+    pub async fn list_limit(&self) -> Result<Option<u32>> {
+        let settings: UserSettings =
+            send_json(self.authed(Method::GET, "/users/settings")?).await?;
+        Ok(settings.limits.and_then(|l| l.list).map(|l| l.count))
+    }
+
     // ---- search -----------------------------------------------------------
 
     pub async fn search_shows(&self, query: &str) -> Result<Vec<SearchResult>> {
@@ -234,12 +282,28 @@ impl TraktClient {
 
     // ---- plumbing ---------------------------------------------------------
 
+    async fn post(&self, path: &str, body: serde_json::Value) -> Result<()> {
+        self.write(Method::POST, path, Some(&body)).await.map(drop)
+    }
+
     /// Writes are limited to one per second; on a 429 wait as told and retry
     /// once.
-    async fn post(&self, path: &str, body: serde_json::Value) -> Result<()> {
-        let res = self.authed(Method::POST, path)?.json(&body).send().await?;
+    async fn write(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<reqwest::Response> {
+        let request = || -> Result<RequestBuilder> {
+            let req = self.authed(method.clone(), path)?;
+            Ok(match body {
+                Some(body) => req.json(body),
+                None => req,
+            })
+        };
+        let res = request()?.send().await?;
         if res.status() != StatusCode::TOO_MANY_REQUESTS {
-            return check(res).await.map(drop);
+            return check(res).await;
         }
         let wait = res
             .headers()
@@ -249,8 +313,7 @@ impl TraktClient {
             .unwrap_or(1)
             .min(10);
         tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-        let res = self.authed(Method::POST, path)?.json(&body).send().await?;
-        check(res).await.map(drop)
+        check(request()?.send().await?).await
     }
 
     fn oauth(&self, path: &str) -> RequestBuilder {

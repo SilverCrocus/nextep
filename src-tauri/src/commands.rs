@@ -4,9 +4,10 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
+use nextep_core::Error;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::ShowStatus;
-use nextep_core::models::{Episode, Show};
+use nextep_core::models::{Episode, Show, TraktList};
 use nextep_core::progress::{
     self, ProgressItem, ProgressOptions, ProgressView, SortBy, title_sort_key,
 };
@@ -334,7 +335,7 @@ pub async fn history(
 
 // ---- library ----------------------------------------------------------------
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Card {
     show_id: u64,
     title: String,
@@ -466,6 +467,196 @@ fn next_note(item: &ProgressItem) -> String {
     match item.next_airs_at() {
         Some(at) => format!("Next: {}", at.format("%-d %b")),
         None => "Waiting for new episodes".into(),
+    }
+}
+
+// ---- lists ------------------------------------------------------------------
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ListSummary {
+    id: u64,
+    name: String,
+    item_count: u32,
+    /// Service that regenerates the list (read-only in Nextep), if any.
+    managed_by: Option<String>,
+}
+
+impl From<&TraktList> for ListSummary {
+    fn from(list: &TraktList) -> Self {
+        Self {
+            id: list.ids.trakt,
+            name: list.name.clone(),
+            item_count: list.item_count,
+            managed_by: list.managed_by().map(str::to_owned),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ListsView {
+    lists: Vec<ListSummary>,
+    /// Personal lists the account may have, if Trakt says.
+    limit: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn lists(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+    cached: Option<bool>,
+) -> Result<ListsView, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("lists");
+    }
+    let client = state.signed_in_client().await?;
+    let lists = state.lists(&client, force.unwrap_or(false)).await?;
+    let view = ListsView {
+        lists: lists.iter().map(ListSummary::from).collect(),
+        limit: client.list_limit().await.ok().flatten(),
+    };
+    state.save_snapshot("lists", &view);
+    Ok(view)
+}
+
+#[derive(Serialize)]
+pub struct ListDetail {
+    list: ListSummary,
+    shows: Vec<Card>,
+}
+
+#[tauri::command]
+pub async fn list_detail(state: State<'_, AppState>, list_id: u64) -> Result<ListDetail, String> {
+    let client = state.signed_in_client().await?;
+    let lists = state.lists(&client, false).await?;
+    let list = lists
+        .iter()
+        .find(|l| l.ids.trakt == list_id)
+        .ok_or("This list no longer exists.")?;
+    let shows = client.list_shows(list_id).await.map_err(to_ui_error)?;
+    state
+        .remember_list_members(
+            list_id,
+            shows.iter().filter_map(|s| s.show.ids.trakt).collect(),
+        )
+        .await;
+    state
+        .fetch_artwork(shows.iter().filter_map(|s| s.show.ids.tmdb))
+        .await;
+
+    let artwork = state.artwork.lock().await;
+    Ok(ListDetail {
+        list: ListSummary::from(list),
+        shows: shows
+            .into_iter()
+            .filter_map(|s| {
+                Some(Card {
+                    show_id: s.show.ids.trakt?,
+                    title: s.show.display_title().to_owned(),
+                    poster: artwork.poster_url(s.show.ids.tmdb, Size::Thumb),
+                    note: s.show.year.map(|y| y.to_string()).unwrap_or_default(),
+                })
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command]
+pub async fn create_list(state: State<'_, AppState>, name: String) -> Result<ListSummary, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Give the list a name.".into());
+    }
+    let client = state.signed_in_client().await?;
+    let list = client.create_list(name).await.map_err(list_error)?;
+    state.invalidate_lists().await;
+    state
+        .remember_list_members(list.ids.trakt, HashSet::new())
+        .await;
+    Ok(ListSummary::from(&list))
+}
+
+#[tauri::command]
+pub async fn rename_list(
+    state: State<'_, AppState>,
+    list_id: u64,
+    name: String,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Give the list a name.".into());
+    }
+    let client = state.signed_in_client().await?;
+    client
+        .rename_list(list_id, name)
+        .await
+        .map_err(list_error)?;
+    state.invalidate_lists().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_list(state: State<'_, AppState>, list_id: u64) -> Result<(), String> {
+    let client = state.signed_in_client().await?;
+    client.delete_list(list_id).await.map_err(list_error)?;
+    state.invalidate_lists().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_in_list(
+    state: State<'_, AppState>,
+    list_id: u64,
+    show_id: u64,
+    on: bool,
+) -> Result<(), String> {
+    let client = state.signed_in_client().await?;
+    if on {
+        client.add_to_list(list_id, show_id).await
+    } else {
+        client.remove_from_list(list_id, show_id).await
+    }
+    .map_err(list_error)?;
+    state.update_list_member(list_id, show_id, on).await;
+    state.invalidate_lists().await;
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ShowListEntry {
+    id: u64,
+    name: String,
+    contains: bool,
+}
+
+/// The user's own (editable) lists, and whether each contains the show.
+#[tauri::command]
+pub async fn show_lists(
+    state: State<'_, AppState>,
+    show_id: u64,
+) -> Result<Vec<ShowListEntry>, String> {
+    let client = state.signed_in_client().await?;
+    let lists = state.lists(&client, false).await?;
+    let mut entries = Vec::new();
+    for list in lists.iter().filter(|l| l.managed_by().is_none()) {
+        let members = state.list_members(&client, list.ids.trakt).await?;
+        entries.push(ShowListEntry {
+            id: list.ids.trakt,
+            name: list.name.clone(),
+            contains: members.contains(&show_id),
+        });
+    }
+    Ok(entries)
+}
+
+/// Trakt answers 420 when an account limit (number of lists, or items per
+/// list) is reached.
+fn list_error(e: Error) -> String {
+    match e {
+        Error::Api { status: 420, .. } => {
+            "Trakt's limit for your account is reached (free accounts: 12 lists, 1,000 shows each)."
+                .into()
+        }
+        e => to_ui_error(e),
     }
 }
 

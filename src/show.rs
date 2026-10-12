@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::api::{self, EpisodeRow, SeasonRow, ShowDetails, ShowStatus};
 use crate::app::nav;
+use crate::lists::ListPicker;
 
 /// Full-screen show page over the tabs. Closed with the back button or
 /// Android's back gesture.
@@ -160,6 +161,7 @@ fn Details(
             <p class="meta">{meta}</p>
             {rating.map(|r| view! { <p class="rating">{r}</p> })}
 
+            <ListPicker show_id=show_id/>
             {if started {
                 view! {
                     <div class="segmented">

@@ -349,7 +349,8 @@ select {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* minmax(0, …) so long titles and posters can't widen a column. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px 10px;
 }
 
@@ -727,4 +728,109 @@ select {
 .center-text {
   margin-top: 8px;
   text-align: center;
+}
+
+/* ---- lists ---- */
+
+.list-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.list-row .info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chevron {
+  font-size: 1.4rem;
+  color: var(--muted);
+}
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.inline-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+}
+
+.list-page {
+  margin-top: 64px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.pill.danger {
+  border-color: #c0392b;
+  color: #ff6b5e;
+}
+
+.card-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  padding: 8px 12px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  text-align: left;
+}
+
+.pick .tick {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--muted);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.pick.on .tick {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent);
 }

@@ -23,15 +23,32 @@ what gets used daily stays, the rest is cut or deferred.
 - [x] Updates: signed releases on GitHub, Obtainium support, in-app banner
 - [x] Opens instantly and works offline (last good result of each screen is saved)
 
-## Later
+## Next
 
-- [ ] Movies (watchlist and watched)
-- [ ] Trakt lists (including third-party lists such as couchmoney and mdblist)
+- [x] **Lists** on top of Trakt lists (they sync to Stremio's Trakt add-on):
+      create, rename, delete, add and remove shows; couchmoney / mdblist
+      lists shown read-only as recommendations; "5 of 12 lists" counter
+- [ ] **Discovery** page
+  - [ ] "Because you watched …" rows (TMDB recommendations for recent shows)
+  - [ ] "Recommended for you" (Trakt's personalised recommendations)
+  - [ ] Trending
+  - [ ] "Would I like it?" model: a small on-device decision model trained on
+        your own history (finished / watching = liked, dropped / on hold =
+        not), scoring candidates by genre, network, rating, year and length
+  - [ ] Optional AI picks: describe a mood and an OpenAI-compatible API
+        (e.g. DeepSeek) ranks and explains real candidates from the rows
+        above. Bring-your-own key, stored only on the device; sends recent
+        watch history to that provider
+- [ ] **Movies**: watchlist, watched, progress-style "to watch", search,
+      movie pages, Calendar releases
 - [ ] New-episode notifications
 - [ ] Home-screen widget
-- [x] Statistics (time watched, top genres), at the bottom of Library
+
+## Done from "Later"
+
 - [x] Where to stream (JustWatch data via TMDB), on the show page
 - [x] History view (Calendar → History)
+- [x] Statistics (time watched, top genres), at the bottom of Library
 
 ## Cut
 

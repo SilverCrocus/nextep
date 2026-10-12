@@ -1,12 +1,13 @@
 //! App state: the Trakt and TMDB clients plus everything persisted in the
 //! app's private data directory.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::{Labels, ShowStatus};
+use nextep_core::models::TraktList;
 use nextep_core::progress::ProgressItem;
 use nextep_core::sync::{self, ProgressCache};
 use nextep_core::tmdb::{ArtworkCache, Size, TmdbClient};
@@ -39,6 +40,9 @@ pub struct AppState {
     items: Mutex<Option<(DateTime<Utc>, Vec<ProgressItem>)>>,
     /// Trakt ids on the watchlist, from the latest fetch.
     watchlist: Mutex<Option<(DateTime<Utc>, HashSet<u64>)>>,
+    /// Personal lists, and the shows on each list once loaded.
+    lists: Mutex<Option<(DateTime<Utc>, Vec<TraktList>)>>,
+    list_members: Mutex<HashMap<u64, HashSet<u64>>>,
 }
 
 impl AppState {
@@ -53,6 +57,8 @@ impl AppState {
             artwork: Mutex::new(read(&dir, ARTWORK_FILE).unwrap_or_default()),
             items: Mutex::new(None),
             watchlist: Mutex::new(None),
+            lists: Mutex::new(None),
+            list_members: Mutex::new(HashMap::new()),
             dir,
         }
     }
@@ -96,6 +102,8 @@ impl AppState {
         *self.labels.lock().await = Labels::default();
         *self.items.lock().await = None;
         *self.watchlist.lock().await = None;
+        *self.lists.lock().await = None;
+        self.list_members.lock().await.clear();
         for name in [TOKEN_FILE, PROGRESS_FILE, LABELS_FILE] {
             let _ = fs::remove_file(self.dir.join(name));
         }
@@ -216,6 +224,58 @@ impl AppState {
 
     pub async fn update_watchlist(&self, show_id: u64, on: bool) {
         if let Some((_, ids)) = &mut *self.watchlist.lock().await {
+            if on {
+                ids.insert(show_id);
+            } else {
+                ids.remove(&show_id);
+            }
+        }
+    }
+
+    /// Personal lists, reusing a fetch from the last couple of minutes unless
+    /// `force` is set.
+    pub async fn lists(&self, client: &TraktClient, force: bool) -> Result<Vec<TraktList>, String> {
+        if !force
+            && let Some((at, lists)) = &*self.lists.lock().await
+            && Utc::now() - *at < Duration::seconds(REUSE_SECS)
+        {
+            return Ok(lists.clone());
+        }
+        let lists = client.my_lists().await.map_err(to_ui_error)?;
+        *self.lists.lock().await = Some((Utc::now(), lists.clone()));
+        if force {
+            self.list_members.lock().await.clear();
+        }
+        Ok(lists)
+    }
+
+    /// Lists changed (created, renamed, deleted): fetch them again next time.
+    pub async fn invalidate_lists(&self) {
+        *self.lists.lock().await = None;
+    }
+
+    /// Trakt ids of the shows on a list, fetched once and then kept current
+    /// by [`Self::update_list_member`].
+    pub async fn list_members(
+        &self,
+        client: &TraktClient,
+        list_id: u64,
+    ) -> Result<HashSet<u64>, String> {
+        if let Some(ids) = self.list_members.lock().await.get(&list_id) {
+            return Ok(ids.clone());
+        }
+        let shows = client.list_shows(list_id).await.map_err(to_ui_error)?;
+        let ids: HashSet<u64> = shows.iter().filter_map(|s| s.show.ids.trakt).collect();
+        self.remember_list_members(list_id, ids.clone()).await;
+        Ok(ids)
+    }
+
+    pub async fn remember_list_members(&self, list_id: u64, ids: HashSet<u64>) {
+        self.list_members.lock().await.insert(list_id, ids);
+    }
+
+    pub async fn update_list_member(&self, list_id: u64, show_id: u64, on: bool) {
+        if let Some(ids) = self.list_members.lock().await.get_mut(&list_id) {
             if on {
                 ids.insert(show_id);
             } else {

@@ -62,6 +62,33 @@ pub async fn set_watchlist(show_id: u64, on: bool) -> Result<(), String> {
     call("set_watchlist", Args { show_id, on }).await
 }
 
+pub async fn create_list(name: &str) -> Result<ListSummary, String> {
+    #[derive(Serialize)]
+    struct Args<'a> {
+        name: &'a str,
+    }
+    call("create_list", Args { name }).await
+}
+
+pub async fn set_in_list(list_id: u64, show_id: u64, on: bool) -> Result<(), String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        list_id: u64,
+        show_id: u64,
+        on: bool,
+    }
+    call(
+        "set_in_list",
+        Args {
+            list_id,
+            show_id,
+            on,
+        },
+    )
+    .await
+}
+
 // ---- data (only the fields the UI uses) ------------------------------------
 
 #[derive(Clone, Deserialize)]
@@ -157,6 +184,33 @@ pub struct HistoryItem {
     pub show_title: String,
     pub episode: Episode,
     pub poster: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ListSummary {
+    pub id: u64,
+    pub name: String,
+    pub item_count: u32,
+    pub managed_by: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ListsView {
+    pub lists: Vec<ListSummary>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ListDetail {
+    pub list: ListSummary,
+    pub shows: Vec<Card>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ShowListEntry {
+    pub id: u64,
+    pub name: String,
+    pub contains: bool,
 }
 
 #[derive(Clone, Deserialize)]

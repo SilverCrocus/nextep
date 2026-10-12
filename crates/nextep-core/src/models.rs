@@ -126,6 +126,68 @@ pub struct CalendarEntry {
     pub show: Show,
 }
 
+/// A personal list (`GET /users/me/lists`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TraktList {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub item_count: u32,
+    pub ids: ListIds,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListIds {
+    pub trakt: u64,
+}
+
+impl TraktList {
+    /// Lists that a service such as couchmoney or mdblist regenerates. Edits
+    /// made in Nextep would be overwritten, so these are read-only.
+    pub fn managed_by(&self) -> Option<&'static str> {
+        let description = self
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase();
+        if description.contains("couchmoney") {
+            Some("couchmoney.tv")
+        } else if description.contains("mdblist") {
+            Some("mdblist")
+        } else {
+            None
+        }
+    }
+}
+
+/// One show on a list (`GET /users/me/lists/{id}/items/show`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListedShow {
+    #[serde(default)]
+    pub listed_at: Option<DateTime<Utc>>,
+    pub show: Show,
+}
+
+/// `GET /users/settings` (only the account limits).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UserSettings {
+    #[serde(default)]
+    pub limits: Option<Limits>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Limits {
+    #[serde(default)]
+    pub list: Option<ListLimit>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ListLimit {
+    pub count: u32,
+    pub item_count: u32,
+}
+
 /// `GET /users/me/stats` (only the parts Nextep shows).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserStats {
@@ -178,6 +240,26 @@ pub struct WatchlistShow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_lists_managed_by_services() {
+        let list = |description: &str| TraktList {
+            name: "x".into(),
+            description: Some(description.into()),
+            item_count: 0,
+            ids: ListIds { trakt: 1 },
+        };
+        assert_eq!(
+            list("This list is managed by couchmoney -- to edit or delete it, go to couchmoney.tv")
+                .managed_by(),
+            Some("couchmoney.tv")
+        );
+        assert_eq!(
+            list("This list is maintained by mdblist.com").managed_by(),
+            Some("mdblist")
+        );
+        assert_eq!(list("Shows to watch with Sam").managed_by(), None);
+    }
 
     #[test]
     fn parses_progress_with_nulls() {

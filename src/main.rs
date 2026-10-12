@@ -2,6 +2,7 @@ mod api;
 mod app;
 mod calendar;
 mod library;
+mod lists;
 mod progress;
 mod pull;
 mod search;

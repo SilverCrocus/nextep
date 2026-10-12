@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::api::{self, DeviceCode, NOT_SIGNED_IN, Status};
 use crate::calendar::Calendar;
 use crate::library::Library;
+use crate::lists::ListPage;
 use crate::progress::Progress;
 use crate::pull::PullToRefresh;
 use crate::search::SearchPage;
@@ -16,6 +17,7 @@ use crate::show::ShowPage;
 enum Overlay {
     Search,
     Show(u64),
+    List(u64),
 }
 
 /// App-wide navigation and shared state, provided as context.
@@ -38,6 +40,10 @@ impl Nav {
 
     pub fn open_search(&self) {
         self.push(Overlay::Search);
+    }
+
+    pub fn open_list(&self, list_id: u64) {
+        self.push(Overlay::List(list_id));
     }
 
     /// Each overlay gets a history entry so Android's back gesture closes it.
@@ -316,6 +322,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
     let render_overlay = |(_, overlay): (usize, Overlay)| match overlay {
         Overlay::Search => view! { <SearchPage/> }.into_any(),
         Overlay::Show(show_id) => view! { <ShowPage show_id/> }.into_any(),
+        Overlay::List(list_id) => view! { <ListPage list_id/> }.into_any(),
     };
 
     view! {
