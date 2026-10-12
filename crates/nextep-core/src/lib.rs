@@ -3,9 +3,11 @@
 //! Everything that does not touch the UI lives here so it can be unit tested on
 //! the host and reused by the Tauri shell on Android.
 
+pub mod labels;
 pub mod models;
 pub mod progress;
 pub mod sync;
+pub mod tmdb;
 pub mod trakt;
 
 pub use chrono;

@@ -29,12 +29,13 @@ body {
 body::before {
   content: "";
   position: fixed;
-  z-index: 10;
   top: 0;
   left: 0;
   right: 0;
   height: env(safe-area-inset-top);
   background: var(--bg);
+  /* Above the show page too. */
+  z-index: 30;
 }
 
 .screen {
@@ -282,4 +283,277 @@ select {
 
 .check:disabled {
   opacity: 0.4;
+}
+
+/* ---- posters & rows ---- */
+
+.tap {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 12px;
+  align-items: center;
+}
+
+.thumb {
+  flex: none;
+  width: 54px;
+  height: 81px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--surface);
+}
+
+.blank {
+  background: var(--surface);
+}
+
+.pad {
+  padding: 0 16px;
+}
+
+/* ---- library ---- */
+
+.chips {
+  display: flex;
+  gap: 8px;
+  margin: 0 -16px 16px;
+  padding: 0 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.chip {
+  flex: none;
+  padding: 6px 14px;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.chip.active {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.chip .count {
+  margin-left: 6px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px 10px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.poster {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--surface);
+}
+
+.card-title {
+  overflow: hidden;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.card-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 32px;
+}
+
+/* ---- show page ---- */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: calc(32px + env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+
+.back {
+  position: fixed;
+  z-index: 31;
+  top: calc(env(safe-area-inset-top) + 8px);
+  left: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 1.3rem;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.hero {
+  position: relative;
+  height: 240px;
+  background: var(--surface);
+}
+
+.hero-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hero-fade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(18, 18, 18, 0.5), transparent 30%, transparent 55%, var(--bg));
+}
+
+.details {
+  margin-top: -40px;
+  position: relative;
+  padding: 0 16px;
+}
+
+.show-title {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 800;
+}
+
+.details > .meta {
+  margin: 4px 0 0;
+}
+
+.rating {
+  margin: 6px 0 0;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.segmented {
+  display: flex;
+  margin-top: 16px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.segmented button {
+  flex: 1;
+  padding: 8px 0;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.segmented button.active {
+  color: var(--text);
+  background: #333;
+  font-weight: 600;
+}
+
+.details > .hint {
+  min-height: 1.2em;
+  margin: 6px 0 0;
+}
+
+.progress-line {
+  margin: 16px 0 0;
+  font-size: 0.9rem;
+}
+
+.next {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.next p {
+  margin: 0;
+}
+
+.overview {
+  margin: 16px 0 0;
+  color: #d0d0d0;
+}
+
+.season {
+  padding: 10px 0;
+  border-bottom: 1px solid #262626;
+}
+
+.season-head {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 0;
+}
+
+.season-name {
+  font-weight: 600;
+}
+
+.episodes {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+
+.ep.done {
+  color: var(--muted);
+}
+
+.ep-num {
+  flex: none;
+  width: 34px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.ep-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.watched {
+  width: 44px;
+  text-align: center;
+  color: var(--accent);
+}
+
+.check.small {
+  width: 44px;
+  height: 30px;
+  font-size: 0.95rem;
 }

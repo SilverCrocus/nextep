@@ -7,8 +7,8 @@ Nextep answers one question well: **what's the next episode I should watch?**
 It reads your watch history from Trakt, so anything another app scrobbles to
 Trakt (for example Stremio) shows up automatically.
 
-> **Status:** early development. The project skeleton, Trakt client and
-> progress ordering exist; the app does not sign in or show data yet. See
+> **Status:** early development, usable day to day: Trakt sign-in, Progress,
+> Calendar, Library, show pages, posters, and On hold / Dropped labels. See
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why
@@ -43,8 +43,9 @@ machine with `cargo test -p nextep-core`.
 
 Copy `.env.example` to `.env` and fill in:
 
-- **Trakt**: create an app at <https://trakt.tv/oauth/applications/new> with
-  redirect URI `urn:ietf:wg:oauth:2.0:oob`.
+- **Trakt**: create an app at <https://developer.trakt.tv/apps>. Only the
+  Client ID is used. If you fork, register your own redirect URI and update
+  `REDIRECT_URI` in `crates/nextep-core/src/trakt/mod.rs`.
 - **TMDB** (artwork): <https://www.themoviedb.org/settings/api>.
 
 `.env` is gitignored and baked into the build by `src-tauri/build.rs`.

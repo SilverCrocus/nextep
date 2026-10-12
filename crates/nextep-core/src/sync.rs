@@ -64,7 +64,9 @@ pub async fn refresh_progress(
         .buffer_unordered(CONCURRENCY);
     while let Some((id, result)) = results.next().await {
         match result {
-            Ok(progress) => {
+            Ok(mut progress) => {
+                // Per-episode detail is only needed on the show page.
+                progress.seasons.clear();
                 let entry = CachedProgress {
                     last_updated_at: updated_at.get(&id).copied().flatten(),
                     fetched_at: now,

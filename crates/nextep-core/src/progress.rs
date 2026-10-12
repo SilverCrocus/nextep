@@ -17,6 +17,9 @@ pub struct ProgressItem {
     pub completed: u32,
     pub last_watched_at: Option<DateTime<Utc>>,
     pub next_episode: Option<Episode>,
+    /// Poster image URL, filled in by the app from TMDB.
+    #[serde(default)]
+    pub poster: Option<String>,
 }
 
 impl ProgressItem {
@@ -25,8 +28,11 @@ impl ProgressItem {
             show: watched.show,
             aired: progress.aired,
             completed: progress.completed,
-            last_watched_at: progress.last_watched_at.or(watched.last_watched_at),
+            // The watched list is fetched on every refresh; the progress may
+            // be cached, so take whichever is newer.
+            last_watched_at: progress.last_watched_at.max(watched.last_watched_at),
             next_episode: progress.next_episode,
+            poster: None,
         }
     }
 
@@ -34,7 +40,7 @@ impl ProgressItem {
         self.aired.saturating_sub(self.completed)
     }
 
-    fn next_airs_at(&self) -> Option<DateTime<Utc>> {
+    pub fn next_airs_at(&self) -> Option<DateTime<Utc>> {
         self.next_episode.as_ref().and_then(|e| e.first_aired)
     }
 
@@ -49,13 +55,17 @@ impl ProgressItem {
             .is_some_and(|at| at <= now && now - at <= window)
     }
 
-    /// Sort key for titles: case-insensitive and ignoring a leading "The ".
     fn title_key(&self) -> String {
-        let title = self.show.display_title().to_lowercase();
-        match title.strip_prefix("the ") {
-            Some(rest) => rest.to_owned(),
-            None => title,
-        }
+        title_sort_key(self.show.display_title())
+    }
+}
+
+/// Sort key for titles: case-insensitive and ignoring a leading "The ".
+pub fn title_sort_key(title: &str) -> String {
+    let title = title.to_lowercase();
+    match title.strip_prefix("the ") {
+        Some(rest) => rest.to_owned(),
+        None => title,
     }
 }
 
@@ -80,6 +90,8 @@ pub struct ProgressOptions {
     pub new_episodes_first: bool,
     /// How long after airing an episode counts as "new".
     pub new_window_days: i64,
+    /// How far ahead the Upcoming section looks.
+    pub upcoming_days: i64,
 }
 
 impl Default for ProgressOptions {
@@ -88,6 +100,7 @@ impl Default for ProgressOptions {
             sort: SortBy::RecentlyWatched,
             new_episodes_first: true,
             new_window_days: 7,
+            upcoming_days: 30,
         }
     }
 }
@@ -97,14 +110,16 @@ impl Default for ProgressOptions {
 pub struct ProgressView {
     /// Next episode aired recently (only when `new_episodes_first` is on).
     pub new_episodes: Vec<ProgressItem>,
+    /// Caught up, next episode airs within `upcoming_days`; soonest first.
+    /// Shows the user is behind on never appear here.
+    pub upcoming: Vec<ProgressItem>,
     /// Next episode is out; ordered by the chosen sort.
     pub watching: Vec<ProgressItem>,
-    /// Caught up, next episode not aired yet; soonest first.
-    pub upcoming: Vec<ProgressItem>,
 }
 
-/// Splits and orders progress items. Shows with no next episode (fully watched
-/// and ended, or no episodes) are dropped.
+/// Splits and orders progress items. Left out: shows with no next episode
+/// (fully watched), and caught-up shows whose next episode has no air date or
+/// airs beyond the Upcoming window.
 pub fn arrange(
     items: Vec<ProgressItem>,
     opts: &ProgressOptions,
@@ -113,9 +128,13 @@ pub fn arrange(
     let window = Duration::days(opts.new_window_days);
     let mut view = ProgressView::default();
 
+    let horizon = now + Duration::days(opts.upcoming_days);
+
     for item in items.into_iter().filter(|i| i.next_episode.is_some()) {
         if item.is_upcoming(now) {
-            view.upcoming.push(item);
+            if item.next_airs_at().is_some_and(|at| at <= horizon) {
+                view.upcoming.push(item);
+            }
         } else if opts.new_episodes_first && item.is_new(now, window) {
             view.new_episodes.push(item);
         } else {
@@ -129,9 +148,8 @@ pub fn arrange(
             .then_with(|| by_title(a, b))
     });
     view.watching.sort_by(|a, b| compare(opts.sort, a, b));
-    // Unknown air dates go last.
     view.upcoming
-        .sort_by_key(|i| (i.next_airs_at().is_none(), i.next_airs_at(), i.title_key()));
+        .sort_by_key(|i| (i.next_airs_at(), i.title_key()));
     view
 }
 
@@ -179,6 +197,7 @@ mod tests {
                 first_aired: airs_in_days.map(|d| now() + Duration::days(d)),
                 ..Default::default()
             }),
+            poster: None,
         }
     }
 
@@ -217,14 +236,26 @@ mod tests {
     }
 
     #[test]
-    fn upcoming_sorted_by_air_date_with_unknown_last() {
+    fn upcoming_is_soonest_first_within_the_window() {
         let items = vec![
             item("TBA", 0, Some(1), None),
             item("Next week", 0, Some(1), Some(7)),
+            item("Next year", 0, Some(1), Some(200)),
             item("Tomorrow", 0, Some(1), Some(1)),
         ];
         let view = arrange(items, &ProgressOptions::default(), now());
-        assert_eq!(titles(&view.upcoming), ["Tomorrow", "Next week", "TBA"]);
+        assert_eq!(titles(&view.upcoming), ["Tomorrow", "Next week"]);
+        assert!(view.watching.is_empty());
+    }
+
+    #[test]
+    fn shows_you_are_behind_on_never_appear_in_upcoming() {
+        // 5 aired episodes unwatched: the next one to watch has already aired,
+        // even if a newer episode airs tomorrow.
+        let items = vec![item("Behind", 5, Some(1), Some(-30))];
+        let view = arrange(items, &ProgressOptions::default(), now());
+        assert!(view.upcoming.is_empty());
+        assert_eq!(titles(&view.watching), ["Behind"]);
     }
 
     #[test]

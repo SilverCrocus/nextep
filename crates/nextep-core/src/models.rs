@@ -86,6 +86,36 @@ pub struct ShowProgress {
     pub next_episode: Option<Episode>,
     #[serde(default)]
     pub last_episode: Option<Episode>,
+    /// Per-episode detail. Only aired episodes are listed.
+    #[serde(default)]
+    pub seasons: Vec<SeasonProgress>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SeasonProgress {
+    pub number: u32,
+    pub aired: u32,
+    pub completed: u32,
+    #[serde(default)]
+    pub episodes: Vec<EpisodeProgress>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EpisodeProgress {
+    pub number: u32,
+    pub completed: bool,
+    #[serde(default)]
+    pub last_watched_at: Option<DateTime<Utc>>,
+}
+
+/// One entry of `GET /shows/{id}/seasons?extended=full,episodes`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Season {
+    pub number: u32,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub episodes: Vec<Episode>,
 }
 
 /// One entry of `GET /calendars/my/shows/{start}/{days}`.

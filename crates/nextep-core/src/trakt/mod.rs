@@ -16,7 +16,7 @@ use reqwest::{Method, RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
-use crate::models::{CalendarEntry, ShowProgress, WatchedShow, WatchlistShow};
+use crate::models::{CalendarEntry, Season, Show, ShowProgress, WatchedShow, WatchlistShow};
 use crate::{Error, Result};
 
 pub const API_URL: &str = "https://api.trakt.tv";
@@ -124,6 +124,21 @@ impl TraktClient {
         let path = format!(
             "/shows/{show_trakt_id}/progress/watched?hidden=false&specials=false&count_specials=false&last_activity=watched&extended=full"
         );
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn show(&self, show_trakt_id: u64) -> Result<Show> {
+        send_json(self.authed(
+            Method::GET,
+            &format!("/shows/{show_trakt_id}?extended=full"),
+        )?)
+        .await
+    }
+
+    /// All seasons with their episodes (titles and air dates). Large; only
+    /// for the show page.
+    pub async fn seasons(&self, show_trakt_id: u64) -> Result<Vec<Season>> {
+        let path = format!("/shows/{show_trakt_id}/seasons?extended=full,episodes");
         send_json(self.authed(Method::GET, &path)?).await
     }
 

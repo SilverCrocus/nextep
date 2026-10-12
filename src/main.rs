@@ -1,6 +1,11 @@
+mod api;
 mod app;
+mod calendar;
+mod library;
+mod progress;
+mod show;
 
-use app::*;
+use app::App;
 use leptos::prelude::*;
 
 fn main() {
