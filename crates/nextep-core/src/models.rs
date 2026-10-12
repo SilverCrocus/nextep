@@ -229,6 +229,14 @@ pub struct SearchResult {
     pub show: Show,
 }
 
+/// One entry of `GET /shows/trending`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrendingShow {
+    #[serde(default)]
+    pub watchers: u32,
+    pub show: Show,
+}
+
 /// One entry of `GET /sync/watchlist/shows`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WatchlistShow {

@@ -18,7 +18,7 @@ use serde_json::json;
 
 use crate::models::{
     CalendarEntry, HiddenShow, HistoryEntry, ListedShow, SearchResult, Season, Show, ShowProgress,
-    TraktList, UserSettings, UserStats, WatchedShow, WatchlistShow,
+    TraktList, TrendingShow, UserSettings, UserStats, WatchedShow, WatchlistShow,
 };
 use crate::{Error, Result};
 
@@ -197,7 +197,9 @@ impl TraktClient {
         const PAGE_SIZE: usize = 250;
         let mut all = Vec::new();
         for page in 1..=20 {
-            let path = format!("/users/hidden/{section}?type=show&limit={PAGE_SIZE}&page={page}");
+            let path = format!(
+                "/users/hidden/{section}?type=show&extended=full&limit={PAGE_SIZE}&page={page}"
+            );
             let batch: Vec<HiddenShow> = send_json(self.authed(Method::GET, &path)?).await?;
             let last = batch.len() < PAGE_SIZE;
             all.extend(batch);
@@ -267,6 +269,26 @@ impl TraktClient {
         let settings: UserSettings =
             send_json(self.authed(Method::GET, "/users/settings")?).await?;
         Ok(settings.limits.and_then(|l| l.list).map(|l| l.count))
+    }
+
+    // ---- discovery --------------------------------------------------------
+
+    /// Trakt's personalised recommendations from the user's history.
+    pub async fn recommended_shows(&self, limit: u32) -> Result<Vec<Show>> {
+        let path = format!(
+            "/recommendations/shows?limit={limit}&ignore_collected=true&ignore_watchlisted=false&extended=full"
+        );
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn related_shows(&self, show_trakt_id: u64, limit: u32) -> Result<Vec<Show>> {
+        let path = format!("/shows/{show_trakt_id}/related?limit={limit}&extended=full");
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn trending_shows(&self, limit: u32) -> Result<Vec<TrendingShow>> {
+        let path = format!("/shows/trending?limit={limit}&extended=full");
+        send_json(self.authed(Method::GET, &path)?).await
     }
 
     // ---- search -----------------------------------------------------------

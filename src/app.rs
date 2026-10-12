@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::api::{self, DeviceCode, NOT_SIGNED_IN, Status};
 use crate::calendar::Calendar;
+use crate::discover::Discover;
 use crate::library::Library;
 use crate::lists::ListPage;
 use crate::progress::Progress;
@@ -243,16 +244,18 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
 enum Tab {
     Progress,
     Calendar,
+    Discover,
     Library,
 }
 
 impl Tab {
-    const ALL: [Tab; 3] = [Tab::Progress, Tab::Calendar, Tab::Library];
+    const ALL: [Tab; 4] = [Tab::Progress, Tab::Calendar, Tab::Discover, Tab::Library];
 
     fn label(self) -> &'static str {
         match self {
             Tab::Progress => "Progress",
             Tab::Calendar => "Calendar",
+            Tab::Discover => "Discover",
             Tab::Library => "Library",
         }
     }
@@ -339,6 +342,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
                     {move || match tab.get() {
                         Tab::Progress => view! { <Progress/> }.into_any(),
                         Tab::Calendar => view! { <Calendar/> }.into_any(),
+                        Tab::Discover => view! { <Discover/> }.into_any(),
                         Tab::Library => view! { <Library/> }.into_any(),
                     }}
                 </PullToRefresh>

@@ -37,6 +37,7 @@ pub fn run() {
             commands::calendar,
             commands::history,
             commands::stats,
+            commands::discover,
             commands::lists,
             commands::list_detail,
             commands::create_list,

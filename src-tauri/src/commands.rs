@@ -11,6 +11,7 @@ use nextep_core::models::{Episode, Show, TraktList};
 use nextep_core::progress::{
     self, ProgressItem, ProgressOptions, ProgressView, SortBy, title_sort_key,
 };
+use nextep_core::taste::{self, TasteModel};
 use nextep_core::tmdb::{Provider, Size};
 use nextep_core::trakt::{DeviceCode, DevicePoll};
 use nextep_core::update::{self, Release};
@@ -468,6 +469,168 @@ fn next_note(item: &ProgressItem) -> String {
         Some(at) => format!("Next: {}", at.format("%-d %b")),
         None => "Waiting for new episodes".into(),
     }
+}
+
+// ---- discover ---------------------------------------------------------------
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DiscoverItem {
+    show_id: u64,
+    title: String,
+    year: Option<i32>,
+    poster: Option<String>,
+    /// How likely the taste model thinks you'd like it, 0–100.
+    match_pct: Option<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DiscoverRow {
+    title: String,
+    items: Vec<DiscoverItem>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DiscoverView {
+    rows: Vec<DiscoverRow>,
+    /// Shows the taste model learned from (0 if it isn't used).
+    learned_from: usize,
+}
+
+/// Rows of shows you haven't watched: picked by the on-device taste model,
+/// related to what you watched last, Trakt's recommendations, and trending.
+#[tauri::command]
+pub async fn discover(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+    cached: Option<bool>,
+) -> Result<DiscoverView, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("discover");
+    }
+    let client = state.signed_in_client().await?;
+    let mut items = state.items(force.unwrap_or(false)).await?;
+    let now = Utc::now();
+
+    // Train on your history, including shows hidden without watching.
+    let labels = state.labels.lock().await;
+    let mut examples: Vec<(Vec<String>, bool)> = items
+        .iter()
+        .filter_map(|i| {
+            let status = i.show.ids.trakt.and_then(|id| labels.status(id));
+            Some((taste::features(&i.show), taste::label(i, status, now)?))
+        })
+        .collect();
+    let watched: HashSet<u64> = items.iter().filter_map(|i| i.show.ids.trakt).collect();
+    examples.extend(
+        labels
+            .iter()
+            .filter(|(id, _)| !watched.contains(id))
+            .filter_map(|(_, l)| Some((taste::features(l.show.as_ref()?), false))),
+    );
+    let exclude: HashSet<u64> = watched
+        .iter()
+        .copied()
+        .chain(labels.iter().map(|(id, _)| id))
+        .collect();
+    drop(labels);
+    let model = TasteModel::train(&examples);
+
+    // The three shows watched most recently seed "Because you watched".
+    items.sort_by_key(|i| Reverse(i.last_watched_at));
+    let recent: Vec<Show> = items
+        .iter()
+        .filter(|i| i.show.ids.trakt.is_some())
+        .take(3)
+        .map(|i| i.show.clone())
+        .collect();
+
+    let (recommended, trending, related) = futures::join!(
+        client.recommended_shows(40),
+        client.trending_shows(30),
+        futures::future::join_all(
+            recent
+                .iter()
+                .map(|s| client.related_shows(s.ids.trakt.unwrap_or_default(), 20))
+        ),
+    );
+    let recommended = recommended.unwrap_or_default();
+    let trending: Vec<Show> = trending
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| t.show)
+        .collect();
+    let related: Vec<Vec<Show>> = related.into_iter().map(Result::unwrap_or_default).collect();
+
+    let fresh = |shows: Vec<Show>| -> Vec<Show> {
+        let mut seen = HashSet::new();
+        shows
+            .into_iter()
+            .filter(|s| {
+                s.ids
+                    .trakt
+                    .is_some_and(|id| !exclude.contains(&id) && seen.insert(id))
+            })
+            .collect()
+    };
+    let by_match = |mut shows: Vec<Show>| -> Vec<Show> {
+        if model.is_useful() {
+            shows.sort_by(|a, b| model.score(b).total_cmp(&model.score(a)));
+        }
+        shows
+    };
+
+    let mut rows: Vec<(String, Vec<Show>)> = Vec::new();
+    if model.is_useful() {
+        let everything: Vec<Show> = recommended
+            .iter()
+            .chain(related.iter().flatten())
+            .chain(trending.iter())
+            .cloned()
+            .collect();
+        let mut picked = by_match(fresh(everything));
+        picked.truncate(20);
+        rows.push(("Picked for you".into(), picked));
+    }
+    for (seed, shows) in recent.iter().zip(related) {
+        rows.push((
+            format!("Because you watched {}", seed.display_title()),
+            by_match(fresh(shows)),
+        ));
+    }
+    rows.push(("Recommended by Trakt".into(), fresh(recommended)));
+    rows.push(("Trending".into(), fresh(trending)));
+    rows.retain(|(_, shows)| !shows.is_empty());
+
+    state
+        .fetch_artwork(rows.iter().flat_map(|(_, s)| s).filter_map(|s| s.ids.tmdb))
+        .await;
+    let artwork = state.artwork.lock().await;
+    let view = DiscoverView {
+        learned_from: if model.is_useful() { examples.len() } else { 0 },
+        rows: rows
+            .into_iter()
+            .map(|(title, shows)| DiscoverRow {
+                title,
+                items: shows
+                    .iter()
+                    .filter_map(|s| {
+                        Some(DiscoverItem {
+                            show_id: s.ids.trakt?,
+                            title: s.display_title().to_owned(),
+                            year: s.year,
+                            poster: artwork.poster_url(s.ids.tmdb, Size::Thumb),
+                            match_pct: model
+                                .is_useful()
+                                .then(|| (model.score(s) * 100.0).round() as u8),
+                        })
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    drop(artwork);
+    state.save_snapshot("discover", &view);
+    Ok(view)
 }
 
 // ---- lists ------------------------------------------------------------------

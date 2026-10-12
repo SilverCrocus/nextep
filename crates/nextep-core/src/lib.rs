@@ -7,6 +7,7 @@ pub mod labels;
 pub mod models;
 pub mod progress;
 pub mod sync;
+pub mod taste;
 pub mod tmdb;
 pub mod trakt;
 pub mod update;

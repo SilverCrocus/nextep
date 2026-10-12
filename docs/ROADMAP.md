@@ -28,11 +28,11 @@ what gets used daily stays, the rest is cut or deferred.
 - [x] **Lists** on top of Trakt lists (they sync to Stremio's Trakt add-on):
       create, rename, delete, add and remove shows; couchmoney / mdblist
       lists shown read-only as recommendations; "5 of 12 lists" counter
-- [ ] **Discovery** page
-  - [ ] "Because you watched …" rows (TMDB recommendations for recent shows)
-  - [ ] "Recommended for you" (Trakt's personalised recommendations)
-  - [ ] Trending
-  - [ ] "Would I like it?" model: a small on-device decision model trained on
+- [ ] **Discovery** page (Discover tab)
+  - [x] "Because you watched …" rows (Trakt related shows for the last three)
+  - [x] "Recommended by Trakt" (personalised recommendations)
+  - [x] Trending
+  - [x] "Would I like it?" model: a small on-device decision model trained on
         your own history (finished / watching = liked, dropped / on hold =
         not), scoring candidates by genre, network, rating, year and length
   - [ ] Optional AI picks: describe a mood and an OpenAI-compatible API

@@ -187,6 +187,27 @@ pub struct HistoryItem {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct DiscoverItem {
+    pub show_id: u64,
+    pub title: String,
+    pub year: Option<i32>,
+    pub poster: Option<String>,
+    pub match_pct: Option<u8>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct DiscoverRow {
+    pub title: String,
+    pub items: Vec<DiscoverItem>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct DiscoverView {
+    pub rows: Vec<DiscoverRow>,
+    pub learned_from: usize,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct ListSummary {
     pub id: u64,
     pub name: String,

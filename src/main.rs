@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod calendar;
+mod discover;
 mod library;
 mod lists;
 mod progress;
