@@ -3,7 +3,7 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, Card, LibraryView, Stats};
-use crate::app::{Poster, nav};
+use crate::app::{Poster, Preview, nav};
 use crate::lists::ListsPanel;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -154,8 +154,9 @@ pub fn Library() -> impl IntoView {
 fn CardView(card: Card) -> impl IntoView {
     let nav = nav();
     let show_id = card.show_id;
+    let preview = Preview::new(&card.title, &card.poster);
     view! {
-        <button class="card" on:click=move |_| nav.open_show(show_id)>
+        <button class="card" on:click=move |_| nav.open_show(show_id, preview.clone())>
             <Poster src=card.poster/>
             <span class="card-title">{card.title}</span>
             <span class="card-note">{card.note}</span>

@@ -6,7 +6,8 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, MovieCard, MovieDetails, MoviesView};
-use crate::app::{Poster, nav};
+use crate::app::{PagePreview, Poster, Preview, nav};
+use crate::show::capitalize;
 
 /// Loads the movie lists (saved copy first, then fresh) and reloads on
 /// changes and pull-to-refresh.
@@ -123,9 +124,10 @@ pub fn MovieProgress() -> impl IntoView {
 fn MovieRow(movie: MovieCard, on_watched: Option<Callback<u64>>) -> impl IntoView {
     let nav = nav();
     let id = movie.movie_id;
+    let preview = Preview::new(&movie.title, &movie.poster);
     view! {
         <li class="row">
-            <div class="tap" on:click=move |_| nav.open_movie(id)>
+            <div class="tap" on:click=move |_| nav.open_movie(id, preview.clone())>
                 <Poster src=movie.poster class="thumb"/>
                 <div class="info">
                     <p class="show">{movie.title}</p>
@@ -199,8 +201,9 @@ pub fn MovieLibrary() -> impl IntoView {
 fn MovieTile(movie: MovieCard) -> impl IntoView {
     let nav = nav();
     let id = movie.movie_id;
+    let preview = Preview::new(&movie.title, &movie.poster);
     view! {
-        <button class="card" on:click=move |_| nav.open_movie(id)>
+        <button class="card" on:click=move |_| nav.open_movie(id, preview.clone())>
             <Poster src=movie.poster/>
             <span class="card-title">{movie.title}</span>
             <span class="card-note">{movie.note}</span>
@@ -215,20 +218,17 @@ pub fn MoviePage(movie_id: u64) -> impl IntoView {
     let data = RwSignal::new(None::<MovieDetails>);
     let error = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);
+    let preview = nav.movie_preview(movie_id);
 
+    // The copy saved last time first, then fresh details from Trakt.
     let load = move || {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Args {
-            movie_id: u64,
-            region: String,
-        }
         spawn_local(async move {
-            let args = Args {
-                movie_id,
-                region: api::region(),
-            };
-            match api::call::<MovieDetails>("movie_details", args).await {
+            if data.with_untracked(Option::is_none)
+                && let Ok(d) = fetch_movie(movie_id, true).await
+            {
+                data.set(Some(d));
+            }
+            match fetch_movie(movie_id, false).await {
                 Ok(d) => data.set(Some(d)),
                 Err(e) => nav.report(e, error),
             }
@@ -277,14 +277,14 @@ pub fn MoviePage(movie_id: u64) -> impl IntoView {
             </button>
             {move || error.get().map(|e| view! { <p class="warn pad">{e}</p> })}
             {move || match data.get() {
-                None => view! { <p class="hint center">"Loading…"</p> }.into_any(),
+                None => view! { <PagePreview preview=preview.clone()/> }.into_any(),
                 Some(d) => {
                     let movie = d.movie;
                     let meta = [
                         movie.year.map(|y| y.to_string()),
                         movie.certification.clone().filter(|c| !c.is_empty()),
                         movie.runtime.filter(|r| *r > 0).map(|r| format!("{}h {:02}m", r / 60, r % 60)),
-                        movie.genres.as_ref().map(|g| g.iter().take(3).cloned().collect::<Vec<_>>().join(", ")),
+                        movie.genres.as_ref().map(|g| g.iter().take(3).map(|g| capitalize(g)).collect::<Vec<_>>().join(", ")),
                     ]
                     .into_iter()
                     .flatten()
@@ -358,4 +358,20 @@ pub fn MoviePage(movie_id: u64) -> impl IntoView {
             }}
         </div>
     }
+}
+
+async fn fetch_movie(movie_id: u64, cached: bool) -> Result<MovieDetails, String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        movie_id: u64,
+        region: String,
+        cached: bool,
+    }
+    let args = Args {
+        movie_id,
+        region: api::region(),
+        cached,
+    };
+    api::call("movie_details", args).await
 }

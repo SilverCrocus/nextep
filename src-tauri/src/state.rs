@@ -330,6 +330,16 @@ impl AppState {
         *self.movies.lock().await = None;
     }
 
+    /// A watched show from the latest refresh, without calling Trakt.
+    pub async fn cached_show(&self, show_id: u64) -> Option<nextep_core::models::Show> {
+        let items = self.items.lock().await;
+        let (_, items) = items.as_ref()?;
+        items
+            .iter()
+            .find(|i| i.show.ids.trakt == Some(show_id))
+            .map(|i| i.show.clone())
+    }
+
     /// Forces the next [`Self::items`] call to ask Trakt again.
     pub async fn invalidate(&self) {
         *self.items.lock().await = None;

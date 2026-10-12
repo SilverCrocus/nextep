@@ -3,7 +3,7 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, Item, ProgressView};
-use crate::app::{Poster, nav};
+use crate::app::{Poster, Preview, nav};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -148,9 +148,10 @@ fn Row(item: Item, kind: Kind, on_mark: Callback<u64>) -> impl IntoView {
     let percent = (item.completed * 100).checked_div(item.aired).unwrap_or(0);
     let marking = RwSignal::new(false);
     let show_id = item.show.ids.trakt;
+    let preview = Preview::new(&item.show.display_title(), &item.poster);
     let open = move |_| {
         if let Some(id) = show_id {
-            nav.open_show(id);
+            nav.open_show(id, preview.clone());
         }
     };
 

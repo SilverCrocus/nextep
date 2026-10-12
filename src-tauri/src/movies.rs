@@ -138,7 +138,7 @@ fn release_or_year(movie: &Movie) -> String {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MovieDetails {
     movie: Movie,
     poster: Option<String>,
@@ -153,11 +153,17 @@ pub struct MovieDetails {
 }
 
 #[tauri::command]
+/// `cached` returns the copy saved when the page was last opened.
 pub async fn movie_details(
     state: State<'_, AppState>,
     movie_id: u64,
     region: Option<String>,
+    cached: Option<bool>,
 ) -> Result<MovieDetails, String> {
+    let snapshot = format!("movie_{movie_id}");
+    if cached.unwrap_or(false) {
+        return state.snapshot(&snapshot);
+    }
     let client = state.signed_in_client().await?;
     let (movie, people) = futures::join!(client.movie(movie_id), client.movie_people(movie_id));
     let movie = movie.map_err(to_ui_error)?;
@@ -181,7 +187,7 @@ pub async fn movie_details(
         )
     };
 
-    Ok(MovieDetails {
+    let details = MovieDetails {
         poster,
         backdrop,
         plays: history.map_or(0, |w| w.plays),
@@ -202,7 +208,9 @@ pub async fn movie_details(
             .map(|c| c.person.name.clone())
             .collect(),
         movie,
-    })
+    };
+    state.save_snapshot(&snapshot, &details);
+    Ok(details)
 }
 
 /// People credited as "Director"; the directing department also lists

@@ -3,7 +3,7 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, AiPick, DiscoverItem, DiscoverView};
-use crate::app::{Poster, nav};
+use crate::app::{Poster, Preview, nav};
 use crate::settings::load_ai_settings;
 
 /// Shows you haven't watched, in shelves: picked by the on-device taste
@@ -96,8 +96,9 @@ pub fn Discover() -> impl IntoView {
 fn ShelfCard(item: DiscoverItem) -> impl IntoView {
     let nav = nav();
     let show_id = item.show_id;
+    let preview = Preview::new(&item.title, &item.poster);
     view! {
-        <button class="card shelf-card" on:click=move |_| nav.open_show(show_id)>
+        <button class="card shelf-card" on:click=move |_| nav.open_show(show_id, preview.clone())>
             <div class="poster-wrap">
                 <Poster src=item.poster/>
                 {item.match_pct.map(|pct| view! { <span class="match">{format!("{pct}%")}</span> })}
@@ -220,9 +221,10 @@ fn AiPickRow(pick: AiPick) -> impl IntoView {
     .flatten()
     .collect::<Vec<_>>()
     .join(" · ");
+    let preview = Preview::new(&pick.title, &pick.poster);
     view! {
         <li class="row">
-            <div class="tap" on:click=move |_| nav.open_show(show_id)>
+            <div class="tap" on:click=move |_| nav.open_show(show_id, preview.clone())>
                 <Poster src=pick.poster class="thumb"/>
                 <div class="info">
                     <p class="show">{pick.title}</p>

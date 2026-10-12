@@ -4,7 +4,7 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, SearchItem};
-use crate::app::{Poster, nav};
+use crate::app::{Poster, Preview, nav};
 
 /// Search Trakt for shows; open one or add it to the watchlist.
 #[component]
@@ -107,6 +107,7 @@ fn SearchRow(item: SearchItem) -> impl IntoView {
     let movie = item.kind == "movie";
     let on_watchlist = RwSignal::new(item.on_watchlist);
     let busy = RwSignal::new(false);
+    let preview = Preview::new(&item.title, &item.poster);
     let meta = [
         Some(if movie {
             "Movie".to_string()
@@ -142,7 +143,13 @@ fn SearchRow(item: SearchItem) -> impl IntoView {
         <li class="row">
             <div
                 class="tap"
-                on:click=move |_| if movie { nav.open_movie(id) } else { nav.open_show(id) }
+                on:click=move |_| {
+                    if movie {
+                        nav.open_movie(id, preview.clone())
+                    } else {
+                        nav.open_show(id, preview.clone())
+                    }
+                }
             >
                 <Poster src=item.poster class="thumb"/>
                 <div class="info">

@@ -3,7 +3,7 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, EpisodeRow, SeasonRow, ShowDetails, ShowStatus};
-use crate::app::nav;
+use crate::app::{PagePreview, nav};
 use crate::lists::ListPicker;
 
 /// Full-screen show page over the tabs. Closed with the back button or
@@ -14,27 +14,26 @@ pub fn ShowPage(show_id: u64) -> impl IntoView {
     let data = RwSignal::new(None::<ShowDetails>);
     let error = RwSignal::new(None::<String>);
     let open_season = RwSignal::new(None::<u32>);
+    let preview = nav.show_preview(show_id);
 
-    let load = move || {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Args {
-            show_id: u64,
-            region: String,
+    let show = move |d: ShowDetails| {
+        // Start with the season of the next episode expanded.
+        if open_season.get_untracked().is_none() {
+            open_season.set(d.next_episode.as_ref().map(|e| e.season));
         }
+        data.set(Some(d));
+    };
+    // The copy saved last time first, so a page opened before appears at
+    // once, then fresh details from Trakt.
+    let load = move || {
         spawn_local(async move {
-            let args = Args {
-                show_id,
-                region: api::region(),
-            };
-            match api::call::<ShowDetails>("show_details", args).await {
-                Ok(d) => {
-                    // Start with the season of the next episode expanded.
-                    if open_season.get_untracked().is_none() {
-                        open_season.set(d.next_episode.as_ref().map(|e| e.season));
-                    }
-                    data.set(Some(d));
-                }
+            if data.with_untracked(Option::is_none)
+                && let Ok(d) = fetch(show_id, true).await
+            {
+                show(d);
+            }
+            match fetch(show_id, false).await {
+                Ok(d) => show(d),
                 Err(e) => nav.report(e, error),
             }
         });
@@ -76,11 +75,27 @@ pub fn ShowPage(show_id: u64) -> impl IntoView {
             </button>
             {move || error.get().map(|e| view! { <p class="warn pad">{e}</p> })}
             {move || match data.get() {
-                None => view! { <p class="hint center">"Loading…"</p> }.into_any(),
+                None => view! { <PagePreview preview=preview.clone()/> }.into_any(),
                 Some(d) => view! { <Details d on_mark on_status open_season/> }.into_any(),
             }}
         </div>
     }
+}
+
+async fn fetch(show_id: u64, cached: bool) -> Result<ShowDetails, String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        show_id: u64,
+        region: String,
+        cached: bool,
+    }
+    let args = Args {
+        show_id,
+        region: api::region(),
+        cached,
+    };
+    api::call("show_details", args).await
 }
 
 #[component]
@@ -313,7 +328,7 @@ fn has_aired(iso: &str) -> bool {
     api::date(iso).get_time() <= js_sys::Date::now()
 }
 
-fn capitalize(s: &str) -> String {
+pub(crate) fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),

@@ -6,7 +6,7 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, ListDetail, ListSummary, ListsView, ShowListEntry};
-use crate::app::{Poster, nav};
+use crate::app::{Poster, Preview, nav};
 
 /// The Lists group in Library.
 #[component]
@@ -266,9 +266,10 @@ pub fn ListPage(list_id: u64) -> impl IntoView {
                                     .into_iter()
                                     .map(|card| {
                                         let show_id = card.show_id;
+                                        let preview = Preview::new(&card.title, &card.poster);
                                         view! {
                                             <div class="card-wrap">
-                                                <button class="card" on:click=move |_| nav.open_show(show_id)>
+                                                <button class="card" on:click=move |_| nav.open_show(show_id, preview.clone())>
                                                     <Poster src=card.poster/>
                                                     <span class="card-title">{card.title}</span>
                                                     <span class="card-note">{card.note}</span>

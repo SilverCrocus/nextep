@@ -1146,7 +1146,7 @@ pub async fn stats(state: State<'_, AppState>, cached: Option<bool>) -> Result<S
 
 // ---- show page --------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct EpisodeRow {
     number: u32,
     title: Option<String>,
@@ -1155,7 +1155,7 @@ pub struct EpisodeRow {
     watched: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct SeasonRow {
     number: u32,
     aired: u32,
@@ -1163,7 +1163,7 @@ pub struct SeasonRow {
     episodes: Vec<EpisodeRow>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ShowDetails {
     show: Show,
     poster: Option<String>,
@@ -1180,26 +1180,53 @@ pub struct ShowDetails {
 
 /// `region` is an ISO 3166-1 country code for streaming availability.
 #[tauri::command]
+/// `cached` returns the copy saved when the page was last opened, so a show
+/// you've seen before opens instantly.
 pub async fn show_details(
     state: State<'_, AppState>,
     show_id: u64,
     region: Option<String>,
+    cached: Option<bool>,
 ) -> Result<ShowDetails, String> {
+    let snapshot = format!("show_{show_id}");
+    if cached.unwrap_or(false) {
+        return state.snapshot(&snapshot);
+    }
     let client = state.signed_in_client().await?;
-    let (show, progress, seasons) = futures::try_join!(
-        client.show(show_id),
-        client.show_progress(show_id),
-        client.seasons(show_id),
-    )
-    .map_err(to_ui_error)?;
 
     // Best effort: a failed lookup just means no "where to watch" row.
-    let streaming = match (state.tmdb(), show.ids.tmdb, region.as_deref()) {
-        (Some(tmdb), Some(tmdb_id), Some(region)) => tmdb
-            .streaming(Media::Tv, tmdb_id, region)
-            .await
-            .unwrap_or_default(),
-        _ => Vec::new(),
+    let streaming_for = |tmdb_id: Option<u64>| {
+        let region = region.clone();
+        let tmdb = state.tmdb().cloned();
+        async move {
+            match (tmdb, tmdb_id, region) {
+                (Some(tmdb), Some(id), Some(region)) => tmdb
+                    .streaming(Media::Tv, id, &region)
+                    .await
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        }
+    };
+    // Everything at once. A show you watch already has its TMDB id cached,
+    // so "where to watch" doesn't have to wait for the show itself.
+    let known_tmdb = state.cached_show(show_id).await.and_then(|s| s.ids.tmdb);
+    let (core, watchlist, early_streaming) = futures::join!(
+        async {
+            futures::try_join!(
+                client.show(show_id),
+                client.show_progress(show_id),
+                client.seasons(show_id),
+            )
+        },
+        state.watchlist_ids(&client),
+        streaming_for(known_tmdb),
+    );
+    let (show, progress, seasons) = core.map_err(to_ui_error)?;
+    let streaming = if known_tmdb.is_some() {
+        early_streaming
+    } else {
+        streaming_for(show.ids.tmdb).await
     };
 
     state.fetch_artwork(show.ids.tmdb).await;
@@ -1253,17 +1280,18 @@ pub async fn show_details(
         .collect();
 
     let status = state.labels.lock().await.status(show_id);
-    let on_watchlist = state.watchlist_ids(&client).await?.contains(&show_id);
-    Ok(ShowDetails {
+    let details = ShowDetails {
         show,
         poster,
         backdrop,
         status,
-        on_watchlist,
+        on_watchlist: watchlist?.contains(&show_id),
         aired: progress.aired,
         completed: progress.completed,
         next_episode: progress.next_episode,
         seasons,
         streaming,
-    })
+    };
+    state.save_snapshot(&snapshot, &details);
+    Ok(details)
 }

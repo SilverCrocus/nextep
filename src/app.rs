@@ -25,6 +25,23 @@ enum Overlay {
     Movie(u64),
 }
 
+/// The title and poster that were tapped, shown while a show or movie page
+/// loads for the first time.
+#[derive(Clone)]
+pub struct Preview {
+    pub title: String,
+    pub poster: Option<String>,
+}
+
+impl Preview {
+    pub fn new(title: &str, poster: &Option<String>) -> Self {
+        Preview {
+            title: title.to_owned(),
+            poster: poster.clone(),
+        }
+    }
+}
+
 /// Whether Progress and Library show TV shows or movies.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Media {
@@ -44,10 +61,14 @@ pub struct Nav {
     pub media: RwSignal<Media>,
     pub version: RwSignal<String>,
     on_signed_out: Callback<()>,
+    /// The page last opened from a row or card, and what was tapped.
+    preview: StoredValue<Option<(Overlay, Preview)>>,
 }
 
 impl Nav {
-    pub fn open_show(&self, show_id: u64) {
+    pub fn open_show(&self, show_id: u64, preview: Preview) {
+        self.preview
+            .set_value(Some((Overlay::Show(show_id), preview)));
         self.push(Overlay::Show(show_id));
     }
 
@@ -63,8 +84,26 @@ impl Nav {
         self.push(Overlay::Settings);
     }
 
-    pub fn open_movie(&self, movie_id: u64) {
+    pub fn open_movie(&self, movie_id: u64, preview: Preview) {
+        self.preview
+            .set_value(Some((Overlay::Movie(movie_id), preview)));
         self.push(Overlay::Movie(movie_id));
+    }
+
+    pub fn show_preview(&self, show_id: u64) -> Option<Preview> {
+        self.preview_for(Overlay::Show(show_id))
+    }
+
+    pub fn movie_preview(&self, movie_id: u64) -> Option<Preview> {
+        self.preview_for(Overlay::Movie(movie_id))
+    }
+
+    fn preview_for(&self, overlay: Overlay) -> Option<Preview> {
+        self.preview.with_value(|p| {
+            p.as_ref()
+                .filter(|(o, _)| *o == overlay)
+                .map(|(_, p)| p.clone())
+        })
     }
 
     /// Each overlay gets a history entry so Android's back gesture closes it.
@@ -297,6 +336,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         }),
         version,
         on_signed_out,
+        preview: StoredValue::new(None),
     };
     provide_context(nav);
     // Coming back to the app (e.g. from Stremio) refreshes the current tab.
@@ -459,6 +499,23 @@ pub fn Poster(src: Option<String>, #[prop(optional)] class: &'static str) -> imp
     match src {
         Some(src) => view! { <img class=class src=src loading="lazy" alt=""/> }.into_any(),
         None => view! { <div class=format!("{class} blank")></div> }.into_any(),
+    }
+}
+
+/// A show or movie page before its details arrive: the tapped poster,
+/// blurred, behind the title.
+#[component]
+pub fn PagePreview(preview: Option<Preview>) -> impl IntoView {
+    let (title, poster) = preview.map(|p| (p.title, p.poster)).unwrap_or_default();
+    view! {
+        <div class="hero">
+            {poster.map(|src| view! { <img class="hero-img blur" src=src alt=""/> })}
+            <div class="hero-fade"></div>
+        </div>
+        <div class="details">
+            <h1 class="show-title">{title}</h1>
+            <p class="hint">"Loading…"</p>
+        </div>
     }
 }
 

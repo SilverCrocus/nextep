@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::api::{self, CalendarItem, Episode, HistoryItem};
-use crate::app::{Poster, nav};
+use crate::app::{Poster, Preview, nav};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -157,6 +157,7 @@ fn EpisodeRow(
     meta: String,
 ) -> impl IntoView {
     let nav = nav();
+    let preview = Preview::new(&title, &poster);
     let second_line = match &episode {
         Some(e) => view! {
             <span class="ep-code">{e.code()}</span>
@@ -171,8 +172,8 @@ fn EpisodeRow(
             <div
                 class="tap"
                 on:click=move |_| match (id, movie) {
-                    (Some(id), true) => nav.open_movie(id),
-                    (Some(id), false) => nav.open_show(id),
+                    (Some(id), true) => nav.open_movie(id, preview.clone()),
+                    (Some(id), false) => nav.open_show(id, preview.clone()),
                     _ => {}
                 }
             >
