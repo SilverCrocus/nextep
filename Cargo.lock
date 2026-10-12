@@ -2632,7 +2632,7 @@ checksum = "60993920e071b0c9b66f14e2b32740a4e27ffc82854dcd72035887f336a09a28"
 
 [[package]]
 name = "nextep"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "futures",
  "nextep-core",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "nextep-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "nextep-ui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "console_error_panic_hook",
  "gloo-timers",
