@@ -32,6 +32,17 @@ async fn open_trakt(url: &str) {
     let _ = call::<()>("open_trakt", Args { url }).await;
 }
 
+/// Best effort: the code is also shown on screen if the clipboard is blocked.
+fn copy_to_clipboard(text: &str) {
+    let get = |target: &JsValue, key: &str| js_sys::Reflect::get(target, &key.into()).ok();
+    let clipboard = get(&js_sys::global(), "navigator").and_then(|nav| get(&nav, "clipboard"));
+    if let Some(clipboard) = clipboard
+        && let Some(write) = get(&clipboard, "writeText")
+    {
+        let _ = js_sys::Function::from(write).call1(&clipboard, &text.into());
+    }
+}
+
 // ---- data from the backend (only the fields the UI uses) -------------------
 
 #[derive(Clone, Deserialize)]
@@ -145,8 +156,9 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
                 Ok(dc) => dc,
                 Err(e) => return message.set(Some(e)),
             };
+            // Show the code first; the user opens Trakt from the button so the
+            // browser doesn't cover the code before they've seen it.
             code.set(Some(dc.clone()));
-            open_trakt(&dc.verification_url).await;
 
             #[derive(Serialize)]
             #[serde(rename_all = "camelCase")]
@@ -155,6 +167,7 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
             }
             let mut interval = dc.interval.max(1);
             let mut waited = 0;
+            let mut failures = 0;
             let outcome = loop {
                 if waited >= dc.expires_in {
                     break "The code expired. Try again.".to_string();
@@ -166,11 +179,18 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
                 };
                 match call::<String>("sign_in_poll", args).await.as_deref() {
                     Ok("signed_in") => return on_signed_in.run(()),
-                    Ok("pending") => {}
+                    Ok("pending") => failures = 0,
                     Ok("slow_down") => interval += 5,
                     Ok("denied") => break "Sign-in was declined on Trakt.".into(),
                     Ok(_) => break "The code expired. Try again.".into(),
-                    Err(e) => break e.to_string(),
+                    // Usually a connection dropped while Android had the app
+                    // frozen in the background; the next poll will succeed.
+                    Err(e) => {
+                        failures += 1;
+                        if failures >= 5 {
+                            break e.clone();
+                        }
+                    }
                 }
             };
             code.set(None);
@@ -191,19 +211,25 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
                 .into_any(),
                 Some(dc) => {
                     let url = dc.verification_url.clone();
+                    let user_code = dc.user_code.clone();
                     view! {
-                        <p class="hint">"Enter this code on Trakt:"</p>
+                        <p class="hint">"Your code:"</p>
                         <p class="user-code">{dc.user_code}</p>
                         <button
-                            class="secondary"
+                            class="primary"
                             on:click=move |_| {
+                                // Copy inside the tap so the clipboard allows it.
+                                copy_to_clipboard(&user_code);
                                 let url = url.clone();
                                 spawn_local(async move { open_trakt(&url).await });
                             }
                         >
-                            "Open Trakt"
+                            "Copy code & open Trakt"
                         </button>
-                        <p class="hint small">"Waiting for you to approve…"</p>
+                        <p class="hint small">
+                            "Paste the code on Trakt and approve, then come back here. "
+                            "Nextep continues on its own."
+                        </p>
                     }
                     .into_any()
                 }

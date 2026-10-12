@@ -78,6 +78,16 @@ fn load<T: DeserializeOwned>(dir: &Path, name: &str) -> Option<T> {
 fn to_ui_error(e: Error) -> String {
     match e {
         Error::NotAuthenticated => NOT_SIGNED_IN.into(),
+        // reqwest's top-level message hides the cause; include the chain.
+        Error::Http(e) => {
+            let mut message = String::from("Network error");
+            let mut source: Option<&dyn std::error::Error> = Some(&e);
+            while let Some(err) = source {
+                message.push_str(&format!(": {err}"));
+                source = err.source();
+            }
+            message
+        }
         e => e.to_string(),
     }
 }

@@ -45,6 +45,9 @@ impl TraktClient {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .default_headers(headers)
+            // Android freezes backgrounded apps; don't reuse connections the
+            // server has long since closed.
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("static reqwest config is valid");
         Self {
