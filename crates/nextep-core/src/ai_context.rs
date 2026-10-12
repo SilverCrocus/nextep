@@ -1,9 +1,10 @@
-//! Tools the AI can call during AI picks to learn the user's taste: recent
-//! shows, an aggregate taste profile, dropped shows, and the people (cast,
-//! creators, directors, writers) behind shows.
+//! What AI picks tells the model about the user's taste: recent shows, an
+//! aggregate taste profile, dropped shows, and the people (cast, creators,
+//! directors, writers) who recur in shows they liked.
 //!
-//! History tools answer from data already on the device. The people tools
-//! look shows up on Trakt and cache the answers for the request.
+//! It is all worked out before the request and sent in the prompt, so a pick
+//! is a single model call. History comes from data already on the device;
+//! favourite people are looked up on Trakt, all shows at once.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,6 +20,10 @@ use crate::taste;
 
 /// Liked shows whose people `favourite_people` looks at.
 const PEOPLE_SHOWS: usize = 12;
+/// Recently watched shows sent in full.
+const RECENT_SHOWS: usize = 15;
+/// Dropped and disliked shows sent in full.
+const DROPPED_SHOWS: usize = 20;
 
 #[derive(Debug, Clone, Serialize)]
 struct ShowFacts {
@@ -38,22 +43,15 @@ struct ShowFacts {
     last_watched: Option<String>,
 }
 
-pub struct ToolBox {
+pub struct TasteContext {
     /// Watched shows, most recently watched first.
     shows: Vec<ShowFacts>,
     /// Shows hidden or dropped without being watched.
     unwatched_dropped: Vec<ShowFacts>,
-    client: TraktClient,
-    people: HashMap<u64, ShowPeople>,
 }
 
-impl ToolBox {
-    pub fn new(
-        items: &[ProgressItem],
-        labels: &Labels,
-        client: TraktClient,
-        now: DateTime<Utc>,
-    ) -> Self {
+impl TasteContext {
+    pub fn new(items: &[ProgressItem], labels: &Labels, now: DateTime<Utc>) -> Self {
         let mut items: Vec<&ProgressItem> = items.iter().collect();
         items.sort_by_key(|i| std::cmp::Reverse(i.last_watched_at));
         let shows: Vec<ShowFacts> = items
@@ -100,90 +98,33 @@ impl ToolBox {
         Self {
             shows,
             unwatched_dropped,
-            client,
-            people: HashMap::new(),
         }
     }
 
-    /// Tool definitions in the OpenAI / DeepSeek `tools` format.
-    pub fn specs() -> Value {
-        let tool = |name: &str, description: &str, parameters: Value| {
-            json!({
-                "type": "function",
-                "function": { "name": name, "description": description, "parameters": parameters },
-            })
-        };
-        let none = json!({ "type": "object", "properties": {} });
-        json!([
-            tool(
-                "recent_shows",
-                "The user's most recently watched shows, newest first, with genres, network, \
-                 episode length, how far they got, status and whether they liked it.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "count": { "type": "integer", "enum": [5, 10, 15, 25], "description": "How many shows." }
-                    },
-                    "required": ["count"],
-                }),
-            ),
-            tool(
-                "taste_profile",
-                "Aggregates over the user's whole history: favourite and disliked genres, \
-                 networks, decades, episode lengths, and how many shows they finish or drop.",
-                none.clone(),
-            ),
-            tool(
-                "dropped_shows",
-                "Shows the user dropped, put on hold, or abandoned early.",
-                none.clone(),
-            ),
-            tool(
-                "show_people",
-                "Creators, directors, writers and main cast (with characters) of one show, by its \
-                 id (a candidate id or an id from recent_shows).",
-                json!({
-                    "type": "object",
-                    "properties": { "show_id": { "type": "integer" } },
-                    "required": ["show_id"],
-                }),
-            ),
-            tool(
-                "favourite_people",
-                "Actors, creators, directors and writers who appear in several of the shows the \
-                 user liked recently.",
-                none,
-            ),
-        ])
+    /// Everything the model gets to know about the user, for the prompt.
+    /// Favourite people need Trakt; if it fails they are left out.
+    pub async fn to_prompt_json(&self, client: &TraktClient) -> Value {
+        json!({
+            "taste_profile": self.taste_profile(),
+            "recent_shows": self.recent_shows(),
+            "dropped_shows": self.dropped_shows(),
+            "favourite_people": self.favourite_people(client).await,
+        })
     }
 
-    /// Runs one tool call. Errors come back as `{"error": ...}` so the model
-    /// can carry on.
-    pub async fn call(&mut self, name: &str, args: &Value) -> Value {
-        match name {
-            "recent_shows" => {
-                let count = args["count"].as_u64().unwrap_or(10).clamp(1, 25) as usize;
-                json!(self.shows.iter().take(count).collect::<Vec<_>>())
-            }
-            "taste_profile" => self.taste_profile(),
-            "dropped_shows" => json!(
-                self.shows
-                    .iter()
-                    .filter(|s| s.verdict == "not for me")
-                    .chain(&self.unwatched_dropped)
-                    .take(30)
-                    .collect::<Vec<_>>()
-            ),
-            "show_people" => match args["show_id"].as_u64() {
-                Some(id) => match self.people_of(id).await {
-                    Ok(people) => summarize_people(people),
-                    Err(e) => json!({ "error": e }),
-                },
-                None => json!({ "error": "show_id is required" }),
-            },
-            "favourite_people" => self.favourite_people().await,
-            _ => json!({ "error": format!("unknown tool {name}") }),
-        }
+    fn recent_shows(&self) -> Value {
+        json!(self.shows.iter().take(RECENT_SHOWS).collect::<Vec<_>>())
+    }
+
+    fn dropped_shows(&self) -> Value {
+        json!(
+            self.shows
+                .iter()
+                .filter(|s| s.verdict == "not for me")
+                .chain(&self.unwatched_dropped)
+                .take(DROPPED_SHOWS)
+                .collect::<Vec<_>>()
+        )
     }
 
     fn taste_profile(&self) -> Value {
@@ -242,19 +183,7 @@ impl ToolBox {
         })
     }
 
-    async fn people_of(&mut self, show_id: u64) -> Result<&ShowPeople, String> {
-        if !self.people.contains_key(&show_id) {
-            let people = self
-                .client
-                .show_people(show_id)
-                .await
-                .map_err(|e| e.to_string())?;
-            self.people.insert(show_id, people);
-        }
-        Ok(&self.people[&show_id])
-    }
-
-    async fn favourite_people(&mut self) -> Value {
+    async fn favourite_people(&self, client: &TraktClient) -> Value {
         let liked: Vec<(u64, String)> = self
             .shows
             .iter()
@@ -262,11 +191,18 @@ impl ToolBox {
             .take(PEOPLE_SHOWS)
             .map(|s| (s.id, s.title.clone()))
             .collect();
+        // All at once: one after another adds a round trip per show.
+        let people: Vec<Option<ShowPeople>> =
+            futures::future::join_all(liked.iter().map(|(id, _)| client.show_people(*id)))
+                .await
+                .into_iter()
+                .map(|r| r.ok())
+                .collect();
 
         // person -> (roles, shows)
         let mut seen: HashMap<String, (HashSet<String>, Vec<String>)> = HashMap::new();
-        for (id, title) in &liked {
-            let Ok(people) = self.people_of(*id).await else {
+        for ((_, title), people) in liked.iter().zip(&people) {
+            let Some(people) = people else {
                 continue;
             };
             for (name, role) in key_people(people) {
@@ -378,27 +314,6 @@ fn crew_by(people: &ShowPeople, department: &str) -> Vec<String> {
         .collect()
 }
 
-fn summarize_people(people: &ShowPeople) -> Value {
-    let take = |department: &str, n: usize| {
-        crew_by(people, department)
-            .into_iter()
-            .take(n)
-            .collect::<Vec<_>>()
-    };
-    json!({
-        "created_by": take("created by", 5),
-        "directors": take("directing", 6),
-        "writers": take("writing", 6),
-        "cast": people
-            .cast
-            .iter()
-            .flatten()
-            .take(12)
-            .map(|c| json!({ "name": c.person.name, "character": c.characters.join(" / ") }))
-            .collect::<Vec<_>>(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,7 +345,7 @@ mod tests {
         }
     }
 
-    fn toolbox() -> ToolBox {
+    fn context() -> TasteContext {
         let items = [
             item(1, "Old Favourite", &["drama"], 20, 300),
             item(2, "Recent Comedy", &["comedy"], 12, 1),
@@ -438,13 +353,12 @@ mod tests {
         ];
         let mut labels = Labels::default();
         labels.set(3, Some(ShowStatus::Dropped), now() - Duration::days(150));
-        ToolBox::new(&items, &labels, TraktClient::new("id"), now())
+        TasteContext::new(&items, &labels, now())
     }
 
-    #[tokio::test]
-    async fn recent_shows_are_newest_first_with_status() {
-        let mut tools = toolbox();
-        let recent = tools.call("recent_shows", &json!({ "count": 5 })).await;
+    #[test]
+    fn recent_shows_are_newest_first_with_status() {
+        let recent = context().recent_shows();
         let titles: Vec<&str> = recent
             .as_array()
             .unwrap()
@@ -460,10 +374,9 @@ mod tests {
         assert_eq!(recent[2]["status"], "finished");
     }
 
-    #[tokio::test]
-    async fn taste_profile_aggregates_likes_and_dislikes() {
-        let mut tools = toolbox();
-        let profile = tools.call("taste_profile", &json!({})).await;
+    #[test]
+    fn taste_profile_aggregates_likes_and_dislikes() {
+        let profile = context().taste_profile();
         assert_eq!(profile["liked"], 2);
         assert_eq!(profile["not_for_me"], 1);
         assert_eq!(profile["disliked_genres"][0][0], "reality");
@@ -471,14 +384,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_tools_and_bad_arguments_return_errors() {
-        let mut tools = toolbox();
-        assert!(tools.call("nope", &json!({})).await["error"].is_string());
-        assert!(tools.call("show_people", &json!({})).await["error"].is_string());
+    async fn prompt_json_has_everything_and_survives_trakt_failing() {
+        // Not signed in, so the people lookups fail.
+        let all = context().to_prompt_json(&TraktClient::new("id")).await;
+        assert_eq!(all["taste_profile"]["shows_watched"], 3);
+        assert_eq!(all["recent_shows"].as_array().unwrap().len(), 3);
+        assert_eq!(all["dropped_shows"][0]["title"], "Abandoned Reality");
+        assert_eq!(
+            all["favourite_people"]["people_in_several_liked_shows"],
+            json!([])
+        );
     }
 
     #[test]
-    fn people_summary_orders_crew_by_episodes() {
+    fn key_people_orders_crew_by_episodes() {
         let person = |name: &str| Person { name: name.into() };
         let people = ShowPeople {
             cast: Some(vec![CastMember {
@@ -502,9 +421,7 @@ mod tests {
                 ],
             )])),
         };
-        let summary = summarize_people(&people);
-        assert_eq!(summary["directors"], json!(["Main", "Rare"]));
-        assert_eq!(summary["cast"][0]["character"], "Mordecai");
+        assert_eq!(crew_by(&people, "directing"), ["Main", "Rare"]);
         assert_eq!(key_people(&people).len(), 3);
     }
 }

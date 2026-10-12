@@ -1,12 +1,12 @@
 //! Optional "AI picks": an OpenAI-compatible chat API (DeepSeek by default)
-//! chooses shows for a mood the user describes, calling tools to look at the
-//! user's history and the people behind shows (see `ai_tools`).
+//! chooses shows for a mood the user describes, given a summary of the user's
+//! history and the people behind shows they liked (see `ai_context`).
 //!
 //! The model only ranks and explains real candidates that Nextep found on
 //! Trakt; any id it returns that isn't a candidate is dropped, so it can't
 //! recommend shows that don't exist. The user brings their own API key, which
-//! stays on the device. Requests include whatever the model asks the tools
-//! for: recent shows, a taste profile, dropped shows and cast and crew.
+//! stays on the device. Requests include recent shows, a taste profile,
+//! dropped shows and favourite cast and crew.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -14,7 +14,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::ai_tools::ToolBox;
 use crate::{Error, Result};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
@@ -22,8 +21,8 @@ pub const DEFAULT_MODEL: &str = "deepseek-flash";
 /// How hard thinking models think: DeepSeek takes `none`, `low`, `high`, `max`.
 pub const DEFAULT_REASONING_EFFORT: &str = "max";
 const MAX_PICKS: usize = 10;
-/// Tool-call rounds before giving up.
-pub const MAX_ROUNDS: usize = 8;
+/// Characters of each candidate's overview sent to the model.
+const OVERVIEW_CHARS: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiConfig {
@@ -70,82 +69,54 @@ pub async fn list_models(config: &AiConfig) -> Result<Vec<String>> {
     Ok(models.data.into_iter().map(|m| m.id).collect())
 }
 
-/// Asks the model for up to ten picks for `mood`. The model can call the
-/// [`ToolBox`] tools (recent shows, taste profile, people, ...) as often as it
-/// likes within [`MAX_ROUNDS`] before answering.
+/// Asks the model for up to ten picks for `mood` in one request. `taste` is
+/// what the model knows about the user (see
+/// [`TasteContext`](crate::ai_context::TasteContext)).
 pub async fn pick(
     config: &AiConfig,
     mood: &str,
     candidates: &[Candidate],
-    tools: &mut ToolBox,
+    taste: &Value,
 ) -> Result<Vec<Pick>> {
-    let (system, user) = prompt(mood, candidates);
-    let mut messages = vec![
-        json!({ "role": "system", "content": system }),
-        json!({ "role": "user", "content": user }),
-    ];
-    for _ in 0..MAX_ROUNDS {
-        // No max_tokens: thinking models count their reasoning towards it, and
-        // a small cap leaves nothing for the answer. No JSON mode either: not
-        // every provider allows it together with tools, so the prompt asks
-        // for JSON and the reply is parsed leniently.
-        let mut body = json!({
-            "model": config.model,
-            "messages": messages,
-            "tools": ToolBox::specs(),
-        });
-        if let Some(effort) = config.reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
-            body["reasoning_effort"] = json!(effort);
-        }
-        let res = client()?
-            .post(format!("{}/chat/completions", base(config)))
-            .bearer_auth(&config.api_key)
-            .json(&body)
-            .send()
-            .await?;
-        let reply: Value = check(res).await?.json().await?;
-        let message = reply["choices"][0]["message"].clone();
-        let calls = message["tool_calls"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        // Sent back exactly as received: DeepSeek requires the
-        // reasoning_content of earlier steps when tools are in use.
-        messages.push(message.clone());
-        if calls.is_empty() {
-            return Ok(parse_picks(
-                message["content"].as_str().unwrap_or_default(),
-                candidates,
-            ));
-        }
-        for call in calls {
-            let name = call["function"]["name"].as_str().unwrap_or_default();
-            let args: Value = call["function"]["arguments"]
-                .as_str()
-                .and_then(|a| serde_json::from_str(a).ok())
-                .unwrap_or_else(|| json!({}));
-            let result = tools.call(name, &args).await;
-            messages.push(json!({
-                "role": "tool",
-                "tool_call_id": call["id"],
-                "content": result.to_string(),
-            }));
-        }
+    let (system, user) = prompt(mood, candidates, taste);
+    // No max_tokens: thinking models count their reasoning towards it, and a
+    // small cap leaves nothing for the answer. No JSON mode either: not every
+    // provider allows it, so the prompt asks for JSON and the reply is parsed
+    // leniently.
+    let mut body = json!({
+        "model": config.model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+    });
+    if let Some(effort) = config.reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
+        body["reasoning_effort"] = json!(effort);
     }
-    Err(Error::Api {
-        status: 0,
-        body: "The AI kept looking things up without answering. Try again.".into(),
-    })
+    let res = client()?
+        .post(format!("{}/chat/completions", base(config)))
+        .bearer_auth(&config.api_key)
+        .json(&body)
+        .send()
+        .await?;
+    let reply: Value = check(res).await?.json().await?;
+    Ok(parse_picks(
+        reply["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or_default(),
+        candidates,
+    ))
 }
 
-fn prompt(mood: &str, candidates: &[Candidate]) -> (String, String) {
+fn prompt(mood: &str, candidates: &[Candidate], taste: &Value) -> (String, String) {
     let system = format!(
-        "You recommend TV shows. First use the tools to understand the user's taste: what they \
-         watched recently, their taste profile, what they dropped, and the people (actors, \
-         creators, directors, writers) behind shows they love or that you are considering. Then \
-         choose only from the numbered candidates you are given; never suggest anything else. \
-         Pick up to {MAX_PICKS} that best fit the user's mood and taste, best first. Your final \
-         reply must be JSON only: {{\"picks\": [{{\"id\": <candidate id>, \"reason\": \"<one \
+        "You recommend TV shows. You are given the user's taste as JSON: a taste profile \
+         aggregated over their whole history, the shows they watched most recently (with how far \
+         they got and whether they liked them), shows they dropped or didn't like, and people \
+         (actors, creators, directors, writers) who recur in shows they liked. Use it to \
+         understand their taste, then choose only from the numbered candidates you are given; \
+         never suggest anything else. Pick up to {MAX_PICKS} that best fit the user's mood and \
+         taste, best first. Reply with JSON only: {{\"picks\": [{{\"id\": <candidate id>, \"reason\": \"<one \
          short sentence, addressed to the user, that can mention what in their history it \
          matches>\"}}]}}"
     );
@@ -163,13 +134,13 @@ fn prompt(mood: &str, candidates: &[Candidate]) -> (String, String) {
                 .as_deref()
                 .unwrap_or_default()
                 .chars()
-                .take(180)
+                .take(OVERVIEW_CHARS)
                 .collect();
             format!("{} | {}{year}{genres} | {overview}", c.id, c.title)
         })
         .collect();
     let user = format!(
-        "My mood: {mood}\n\nCandidates (id | title | about):\n{}",
+        "My mood: {mood}\n\nMy taste:\n{taste}\n\nCandidates (id | title | about):\n{}",
         candidate_lines.join("\n")
     );
     (system, user)
@@ -337,29 +308,18 @@ mod tests {
         (url, handle)
     }
 
-    fn toolbox() -> ToolBox {
-        ToolBox::new(
-            &[],
-            &crate::labels::Labels::default(),
-            crate::TraktClient::new("id"),
-            chrono::Utc::now(),
-        )
-    }
-
     #[tokio::test]
-    async fn pick_runs_tools_then_parses_the_answer() {
-        let asks_for_tool = r#"{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"Let me check their taste.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"taste_profile","arguments":"{}"}}]}}]}"#;
+    async fn pick_is_one_request_without_tools() {
         let answers = r#"{"choices":[{"message":{"role":"assistant","reasoning_content":"Spy drama fits.","content":"Here you go: {\"picks\":[{\"id\":33,\"reason\":\"Tense and witty.\"}]}"}}]}"#;
-        let (url, server) = fake_api(vec![asks_for_tool, answers]);
+        let (url, server) = fake_api(vec![answers]);
         let config = AiConfig {
             base_url: format!("{url}/"),
             api_key: "test-key".into(),
             model: "deepseek-flash".into(),
             reasoning_effort: Some("max".into()),
         };
-        let picks = pick(&config, "spies", &candidates(), &mut toolbox())
-            .await
-            .unwrap();
+        let taste = json!({ "taste_profile": { "shows_watched": 42 } });
+        let picks = pick(&config, "spies", &candidates(), &taste).await.unwrap();
         assert_eq!(
             picks,
             [Pick {
@@ -369,24 +329,19 @@ mod tests {
         );
 
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 2);
-        let first = &requests[0];
-        assert!(first.starts_with("POST /chat/completions HTTP/1.1"));
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
         assert!(
-            first
+            request
                 .to_lowercase()
                 .contains("authorization: bearer test-key")
         );
-        assert!(first.contains(r#""model":"deepseek-flash""#));
-        assert!(first.contains(r#""reasoning_effort":"max""#));
-        assert!(first.contains(r#""name":"favourite_people""#));
-        assert!(!first.contains("max_tokens"));
-        // The second request carries the reasoning back and the tool's answer.
-        let second = &requests[1];
-        assert!(second.contains(r#""reasoning_content":"Let me check their taste.""#));
-        assert!(second.contains(r#""role":"tool""#));
-        assert!(second.contains(r#""tool_call_id":"call_1""#));
-        assert!(second.contains("shows_watched"));
+        assert!(request.contains(r#""model":"deepseek-flash""#));
+        assert!(request.contains(r#""reasoning_effort":"max""#));
+        assert!(request.contains("shows_watched"));
+        assert!(!request.contains(r#""tools""#));
+        assert!(!request.contains("max_tokens"));
     }
 
     #[tokio::test]
@@ -408,11 +363,21 @@ mod tests {
     }
 
     #[test]
-    fn prompt_lists_candidates_and_asks_for_tools() {
-        let (system, user) = prompt("something cosy", &candidates());
+    fn prompt_has_taste_and_candidates() {
+        let taste = json!({ "recent_shows": [{ "title": "Slow Horses" }] });
+        let (system, user) = prompt("something cosy", &candidates(), &taste);
         assert!(system.contains("only from the numbered candidates"));
-        assert!(system.contains("use the tools"));
         assert!(user.contains("My mood: something cosy"));
+        assert!(user.contains(r#"{"recent_shows":[{"title":"Slow Horses"}]}"#));
         assert!(user.contains("22 | Ted Lasso (2022) [drama] | About things."));
+    }
+
+    #[test]
+    fn prompt_shortens_overviews() {
+        let mut long = candidates();
+        long[0].overview = Some("x".repeat(500));
+        let (_, user) = prompt("anything", &long, &json!({}));
+        assert!(user.contains(&format!("| {}\n", "x".repeat(OVERVIEW_CHARS))));
+        assert!(!user.contains(&"x".repeat(OVERVIEW_CHARS + 1)));
     }
 }

@@ -37,9 +37,9 @@ what gets used daily stays, the rest is cut or deferred.
         not), scoring candidates by genre, network, rating, year and length
   - [x] Optional AI picks: describe a mood and an OpenAI-compatible API
         (DeepSeek by default, deepseek-flash with adjustable thinking) picks
-        and explains real candidates from the rows above. It calls tools to
-        look at your history (recent 5/10/15/25 shows, taste profile,
-        dropped shows) and cast & crew (show_people, favourite_people).
+        and explains real candidates from the rows above in a single
+        request that carries your history (recent shows, taste profile,
+        dropped shows) and the cast & crew of shows you liked.
         Bring-your-own key, stored only on the device
 - [x] In-app updates: the update banner downloads the release and opens
       Android's installer (no browser or Obtainium needed)

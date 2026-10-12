@@ -4,7 +4,7 @@
 //! the host and reused by the Tauri shell on Android.
 
 pub mod ai;
-pub mod ai_tools;
+pub mod ai_context;
 pub mod labels;
 pub mod models;
 pub mod progress;
