@@ -9,6 +9,7 @@ pub mod progress;
 pub mod sync;
 pub mod tmdb;
 pub mod trakt;
+pub mod update;
 
 pub use chrono;
 pub use trakt::TraktClient;

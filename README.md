@@ -11,6 +11,19 @@ Trakt (for example Stremio) shows up automatically.
 > Calendar, Library, show pages, posters, and On hold / Dropped labels. See
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## Install
+
+Nextep isn't on the Play Store. Either:
+
+- **Obtainium (recommended, keeps Nextep up to date):** install
+  [Obtainium](https://github.com/ImranR98/Obtainium), tap **Add App**, paste
+  `https://github.com/SilverCrocus/nextep` and install. Obtainium watches for
+  new releases and can install them in the background on Android 12 and
+  newer.
+- **Manually:** download the latest `nextep-x.y.z.apk` from
+  [Releases](https://github.com/SilverCrocus/nextep/releases). Nextep shows a
+  banner when a newer version is out.
+
 ## Why
 
 [Showly](https://github.com/trakt/showly) is a great Trakt client but has grown
@@ -61,6 +74,23 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-u
 
 The generated Android project lives in `src-tauri/gen/android` and is
 committed, so `cargo tauri android init` is not needed after cloning.
+
+## Releasing
+
+```sh
+scripts/release.sh 0.3.0
+```
+
+This bumps the version in `Cargo.toml` and `tauri.conf.json`, commits, tags
+`v0.3.0` and pushes. [The release workflow](.github/workflows/release.yml)
+then builds a signed APK and publishes it on GitHub, where Obtainium and the
+in-app update check find it.
+
+Every release must be signed with the same key, or Android refuses to install
+it as an update. The key is in the repository secrets
+(`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`) and, for local
+builds, `~/.android-keys/` (see `src-tauri/gen/android/app/build.gradle.kts`).
+Keep a backup of it.
 
 ## License
 

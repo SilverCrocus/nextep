@@ -1,11 +1,12 @@
 //! App state: the Trakt and TMDB clients plus everything persisted in the
 //! app's private data directory.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use nextep_core::chrono::{DateTime, Duration, Utc};
-use nextep_core::labels::Labels;
+use nextep_core::labels::{Labels, ShowStatus};
 use nextep_core::progress::ProgressItem;
 use nextep_core::sync::{self, ProgressCache};
 use nextep_core::tmdb::{ArtworkCache, Size, TmdbClient};
@@ -35,6 +36,8 @@ pub struct AppState {
     pub artwork: Mutex<ArtworkCache>,
     /// Latest refresh, shared by Progress and Library.
     items: Mutex<Option<(DateTime<Utc>, Vec<ProgressItem>)>>,
+    /// Trakt ids on the watchlist, from the latest fetch.
+    watchlist: Mutex<Option<(DateTime<Utc>, HashSet<u64>)>>,
 }
 
 impl AppState {
@@ -48,6 +51,7 @@ impl AppState {
             labels: Mutex::new(read(&dir, LABELS_FILE).unwrap_or_default()),
             artwork: Mutex::new(read(&dir, ARTWORK_FILE).unwrap_or_default()),
             items: Mutex::new(None),
+            watchlist: Mutex::new(None),
             dir,
         }
     }
@@ -68,13 +72,15 @@ impl AppState {
         self.save(LABELS_FILE, labels)
     }
 
-    /// Signing out forgets the account and its cached data. Labels stay, so
-    /// signing back in restores them.
+    /// Signing out forgets the account and its cached data. Labels live on
+    /// Trakt, so signing back in restores them.
     pub async fn sign_out(&self) {
         self.trakt.lock().await.set_token(None);
         *self.progress.lock().await = ProgressCache::default();
+        *self.labels.lock().await = Labels::default();
         *self.items.lock().await = None;
-        for name in [TOKEN_FILE, PROGRESS_FILE] {
+        *self.watchlist.lock().await = None;
+        for name in [TOKEN_FILE, PROGRESS_FILE, LABELS_FILE] {
             let _ = fs::remove_file(self.dir.join(name));
         }
     }
@@ -127,10 +133,22 @@ impl AppState {
             items
         };
 
+        // Labels live on Trakt; refresh them along with the progress. If that
+        // fails, the copy on the device is used.
+        let hidden = futures::try_join!(
+            client.hidden_shows(ShowStatus::OnHold.trakt_section()),
+            client.hidden_shows(ShowStatus::Dropped.trakt_section()),
+        );
         let mut labels = self.labels.lock().await;
-        if labels.clear_rewatched(&items) {
-            self.save_labels(&labels).await?;
+        if let Ok((on_hold, dropped)) = hidden {
+            *labels = Labels::from_trakt(&on_hold, &dropped, &labels, now);
         }
+        for (show_id, status) in labels.clear_rewatched(&items) {
+            // If this fails the show stays hidden on Trakt and the next
+            // refresh clears it again.
+            let _ = client.unhide_show(status.trakt_section(), show_id).await;
+        }
+        self.save_labels(&labels).await?;
         drop(labels);
 
         self.fetch_artwork(items.iter().filter_map(|i| i.show.ids.tmdb))
@@ -143,6 +161,39 @@ impl AppState {
 
         *self.items.lock().await = Some((now, items.clone()));
         Ok(items)
+    }
+
+    /// Trakt ids of watched shows, from the progress cache (no API call).
+    pub async fn watched_ids(&self) -> HashSet<u64> {
+        self.progress.lock().await.show_ids().collect()
+    }
+
+    /// Trakt ids on the watchlist, reusing a fetch from the last couple of
+    /// minutes.
+    pub async fn watchlist_ids(&self, client: &TraktClient) -> Result<HashSet<u64>, String> {
+        if let Some((at, ids)) = &*self.watchlist.lock().await
+            && Utc::now() - *at < Duration::seconds(REUSE_SECS)
+        {
+            return Ok(ids.clone());
+        }
+        let list = client.watchlist_shows().await.map_err(to_ui_error)?;
+        let ids: HashSet<u64> = list.iter().filter_map(|w| w.show.ids.trakt).collect();
+        self.remember_watchlist(ids.clone()).await;
+        Ok(ids)
+    }
+
+    pub async fn remember_watchlist(&self, ids: HashSet<u64>) {
+        *self.watchlist.lock().await = Some((Utc::now(), ids));
+    }
+
+    pub async fn update_watchlist(&self, show_id: u64, on: bool) {
+        if let Some((_, ids)) = &mut *self.watchlist.lock().await {
+            if on {
+                ids.insert(show_id);
+            } else {
+                ids.remove(&show_id);
+            }
+        }
     }
 
     /// Forces the next [`Self::items`] call to ask Trakt again.

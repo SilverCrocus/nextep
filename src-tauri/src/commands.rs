@@ -12,6 +12,7 @@ use nextep_core::progress::{
 };
 use nextep_core::tmdb::Size;
 use nextep_core::trakt::{DeviceCode, DevicePoll};
+use nextep_core::update::{self, Release};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -89,16 +90,29 @@ pub async fn sign_out(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Opens a Trakt page in the system browser. Limited to Trakt so the UI can't
-/// be used to open arbitrary links.
+/// Opens a link in the system browser. Limited to Trakt and Nextep's own
+/// GitHub releases so the UI can't be used to open arbitrary links.
 #[tauri::command]
-pub fn open_trakt(app: AppHandle, url: String) -> Result<(), String> {
-    if !(url.starts_with("https://auth.trakt.tv/") || url.starts_with("https://trakt.tv/")) {
-        return Err("only Trakt links can be opened".into());
+pub fn open_link(app: AppHandle, url: String) -> Result<(), String> {
+    const ALLOWED: [&str; 3] = [
+        "https://auth.trakt.tv/",
+        "https://trakt.tv/",
+        "https://github.com/SilverCrocus/nextep/releases/",
+    ];
+    if !ALLOWED.iter().any(|prefix| url.starts_with(prefix)) {
+        return Err("this link can't be opened".into());
     }
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// A newer release on GitHub, if there is one.
+#[tauri::command]
+pub async fn check_update() -> Result<Option<Release>, String> {
+    update::check(env!("CARGO_PKG_VERSION"))
+        .await
+        .map_err(to_ui_error)
 }
 
 // ---- progress ---------------------------------------------------------------
@@ -130,16 +144,96 @@ pub async fn mark_watched(state: State<'_, AppState>, episode_id: u64) -> Result
     Ok(())
 }
 
-/// `None` puts the show back to watching.
+/// Saves the label on Trakt (see `nextep_core::labels`). `None` puts the
+/// show back to watching.
 #[tauri::command]
 pub async fn set_show_status(
     state: State<'_, AppState>,
     show_id: u64,
     status: Option<ShowStatus>,
 ) -> Result<(), String> {
+    let client = state.signed_in_client().await?;
     let mut labels = state.labels.lock().await;
+    let current = labels.status(show_id);
+    if current == status {
+        return Ok(());
+    }
+    if let Some(current) = current {
+        client
+            .unhide_show(current.trakt_section(), show_id)
+            .await
+            .map_err(to_ui_error)?;
+    }
+    if let Some(status) = status {
+        client
+            .hide_show(status.trakt_section(), show_id)
+            .await
+            .map_err(to_ui_error)?;
+    }
     labels.set(show_id, status, Utc::now());
     state.save_labels(&labels).await
+}
+
+// ---- search & watchlist -----------------------------------------------------
+
+#[derive(Serialize)]
+pub struct SearchItem {
+    show_id: u64,
+    title: String,
+    year: Option<i32>,
+    network: Option<String>,
+    poster: Option<String>,
+    watched: bool,
+    on_watchlist: bool,
+}
+
+#[tauri::command]
+pub async fn search(state: State<'_, AppState>, query: String) -> Result<Vec<SearchItem>, String> {
+    let query = query.trim();
+    if query.chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+    let client = state.signed_in_client().await?;
+    let results = client.search_shows(query).await.map_err(to_ui_error)?;
+    let watchlist = state.watchlist_ids(&client).await?;
+    let watched = state.watched_ids().await;
+    state
+        .fetch_artwork(results.iter().filter_map(|r| r.show.ids.tmdb))
+        .await;
+
+    let artwork = state.artwork.lock().await;
+    Ok(results
+        .into_iter()
+        .filter_map(|r| {
+            let show_id = r.show.ids.trakt?;
+            Some(SearchItem {
+                show_id,
+                title: r.show.display_title().to_owned(),
+                year: r.show.year,
+                network: r.show.network.clone(),
+                poster: artwork.poster_url(r.show.ids.tmdb, Size::Thumb),
+                watched: watched.contains(&show_id),
+                on_watchlist: watchlist.contains(&show_id),
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn set_watchlist(
+    state: State<'_, AppState>,
+    show_id: u64,
+    on: bool,
+) -> Result<(), String> {
+    let client = state.signed_in_client().await?;
+    if on {
+        client.add_to_watchlist(show_id).await
+    } else {
+        client.remove_from_watchlist(show_id).await
+    }
+    .map_err(to_ui_error)?;
+    state.update_watchlist(show_id, on).await;
+    Ok(())
 }
 
 // ---- calendar ---------------------------------------------------------------
@@ -210,6 +304,9 @@ pub async fn library(state: State<'_, AppState>) -> Result<LibraryView, String> 
     let client = state.signed_in_client().await?;
     let watchlist = client.watchlist_shows().await.map_err(to_ui_error)?;
     state
+        .remember_watchlist(watchlist.iter().filter_map(|w| w.show.ids.trakt).collect())
+        .await;
+    state
         .fetch_artwork(watchlist.iter().filter_map(|w| w.show.ids.tmdb))
         .await;
 
@@ -232,20 +329,40 @@ pub async fn library(state: State<'_, AppState>) -> Result<LibraryView, String> 
         match labels.status(show_id) {
             Some(ShowStatus::OnHold) => view.on_hold.push(card(left_note(left))),
             Some(ShowStatus::Dropped) => view.dropped.push(card(left_note(left))),
-            // Same rule as Progress: there is an aired episode to watch next.
-            None if item.next_episode.is_some()
-                && !item.next_airs_at().is_some_and(|at| at > now) =>
-            {
+            // Same rule as Progress: the next episode has aired.
+            None if item.next_airs_at().is_some_and(|at| at <= now) => {
                 view.watching.push(card(left_note(left)))
             }
             None if is_over(&item.show) => view.finished.push(card(status_note(&item.show))),
             None => view.up_to_date.push(card(next_note(item))),
         }
     }
-    drop(labels);
 
+    // Labelled shows that were never watched (e.g. hidden in Showly).
     let watched: HashSet<u64> = items.iter().filter_map(|i| i.show.ids.trakt).collect();
+    let unwatched: Vec<(u64, ShowStatus, Show)> = labels
+        .iter()
+        .filter(|(id, _)| !watched.contains(id))
+        .filter_map(|(id, l)| Some((id, l.status, l.show.clone()?)))
+        .collect();
+    drop(labels);
+    state
+        .fetch_artwork(unwatched.iter().filter_map(|(_, _, s)| s.ids.tmdb))
+        .await;
+
     let artwork = state.artwork.lock().await;
+    for (show_id, status, show) in unwatched {
+        let card = Card {
+            show_id,
+            title: show.display_title().to_owned(),
+            poster: artwork.poster_url(show.ids.tmdb, Size::Thumb),
+            note: "Not started".into(),
+        };
+        match status {
+            ShowStatus::OnHold => view.on_hold.push(card),
+            ShowStatus::Dropped => view.dropped.push(card),
+        }
+    }
     view.watchlist = watchlist
         .into_iter()
         .filter_map(|w| {
@@ -315,6 +432,7 @@ pub struct ShowDetails {
     poster: Option<String>,
     backdrop: Option<String>,
     status: Option<ShowStatus>,
+    on_watchlist: bool,
     aired: u32,
     completed: u32,
     next_episode: Option<Episode>,
@@ -382,11 +500,13 @@ pub async fn show_details(state: State<'_, AppState>, show_id: u64) -> Result<Sh
         .collect();
 
     let status = state.labels.lock().await.status(show_id);
+    let on_watchlist = state.watchlist_ids(&client).await?.contains(&show_id);
     Ok(ShowDetails {
         show,
         poster,
         backdrop,
         status,
+        on_watchlist,
         aired: progress.aired,
         completed: progress.completed,
         next_episode: progress.next_episode,

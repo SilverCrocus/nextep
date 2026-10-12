@@ -65,7 +65,7 @@ pub fn ShowPage(show_id: u64) -> impl IntoView {
 
     view! {
         <div class="sheet">
-            <button class="back" aria-label="Back" on:click=move |_| nav.close_show()>
+            <button class="back" aria-label="Back" on:click=move |_| nav.close()>
                 "←"
             </button>
             {move || error.get().map(|e| view! { <p class="warn pad">{e}</p> })}
@@ -102,6 +102,10 @@ fn Details(
     let percent = (d.completed * 100).checked_div(d.aired).unwrap_or(0);
     let hero = d.backdrop.or(d.poster);
     let status = d.status;
+    // Labels only make sense once you've started a show; before that, offer
+    // the watchlist instead.
+    let started = d.completed > 0;
+    let show_id = show.ids.trakt.unwrap_or_default();
     let status_hint = match status {
         Some(ShowStatus::OnHold) => {
             "On hold: hidden from Progress and Calendar until you watch it again."
@@ -151,20 +155,27 @@ fn Details(
             <p class="meta">{meta}</p>
             {rating.map(|r| view! { <p class="rating">{r}</p> })}
 
-            <div class="segmented">
-                {[(None, "Watching"), (Some(ShowStatus::OnHold), "On hold"), (Some(ShowStatus::Dropped), "Dropped")]
-                    .into_iter()
-                    .map(|(s, label)| {
-                        let active = status == s;
-                        view! {
-                            <button class:active=active on:click=move |_| on_status.run(s)>
-                                {label}
-                            </button>
-                        }
-                    })
-                    .collect_view()}
-            </div>
-            <p class="hint small">{status_hint}</p>
+            {if started {
+                view! {
+                    <div class="segmented">
+                        {[(None, "Watching"), (Some(ShowStatus::OnHold), "On hold"), (Some(ShowStatus::Dropped), "Dropped")]
+                            .into_iter()
+                            .map(|(s, label)| {
+                                let active = status == s;
+                                view! {
+                                    <button class:active=active on:click=move |_| on_status.run(s)>
+                                        {label}
+                                    </button>
+                                }
+                            })
+                            .collect_view()}
+                    </div>
+                    <p class="hint small">{status_hint}</p>
+                }
+                    .into_any()
+            } else {
+                view! { <WatchlistButton show_id=show_id on=d.on_watchlist/> }.into_any()
+            }}
 
             <p class="progress-line">{format!("{} of {} episodes watched", d.completed, d.aired)}</p>
             <div class="bar">
@@ -280,5 +291,28 @@ fn capitalize(s: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
+    }
+}
+
+#[component]
+fn WatchlistButton(show_id: u64, on: bool) -> impl IntoView {
+    let nav = nav();
+    let on = RwSignal::new(on);
+    let busy = RwSignal::new(false);
+    let toggle = move |_| {
+        let want = !on.get_untracked();
+        busy.set(true);
+        spawn_local(async move {
+            if api::set_watchlist(show_id, want).await.is_ok() {
+                on.set(want);
+                nav.data_changed();
+            }
+            busy.set(false);
+        });
+    };
+    view! {
+        <button class="pill wide" class:on=move || on.get() disabled=move || busy.get() on:click=toggle>
+            {move || if on.get() { "✓ On your watchlist" } else { "+ Add to watchlist" }}
+        </button>
     }
 }

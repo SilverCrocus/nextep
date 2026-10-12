@@ -14,7 +14,27 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing key. CI writes keystore.properties next to this project;
+// locally it lives in ~/.android-keys. Without it builds fall back to the
+// debug key, which can't update an installed release.
+val keystoreProperties = Properties().apply {
+    listOf(
+        rootProject.file("keystore.properties"),
+        file(System.getProperty("user.home") + "/.android-keys/keystore.properties"),
+    ).firstOrNull { it.exists() }?.inputStream()?.use { load(it) }
+}
+
 android {
+    signingConfigs {
+        if (keystoreProperties.containsKey("storeFile")) {
+            create("release") {
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("password")
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("password")
+            }
+        }
+    }
     compileSdk = 37
     namespace = "io.github.silvercrocus.nextep"
     defaultConfig {
@@ -27,6 +47,8 @@ android {
     }
     buildTypes {
         getByName("debug") {
+            // Same key as releases, so a dev build can replace an installed release.
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true
@@ -39,6 +61,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             optimization {
                enable = true
             }

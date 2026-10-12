@@ -29,13 +29,16 @@ pub fn run() {
             commands::sign_in_start,
             commands::sign_in_poll,
             commands::sign_out,
-            commands::open_trakt,
+            commands::open_link,
+            commands::check_update,
             commands::progress,
             commands::mark_watched,
             commands::set_show_status,
             commands::calendar,
             commands::library,
             commands::show_details,
+            commands::search,
+            commands::set_watchlist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -28,6 +28,13 @@ pub struct ProgressCache {
     shows: HashMap<u64, CachedProgress>,
 }
 
+impl ProgressCache {
+    /// Trakt ids of every show with cached progress (i.e. watched shows).
+    pub fn show_ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.shows.keys().copied()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedProgress {
     /// `last_updated_at` of the watched entry when this was fetched.

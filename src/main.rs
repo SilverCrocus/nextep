@@ -3,6 +3,7 @@ mod app;
 mod calendar;
 mod library;
 mod progress;
+mod search;
 mod show;
 
 use app::App;

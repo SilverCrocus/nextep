@@ -7,12 +7,20 @@ use crate::api::{self, DeviceCode, NOT_SIGNED_IN, Status};
 use crate::calendar::Calendar;
 use crate::library::Library;
 use crate::progress::Progress;
+use crate::search::SearchPage;
 use crate::show::ShowPage;
+
+/// Full-screen pages shown over the tabs, newest last.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Overlay {
+    Search,
+    Show(u64),
+}
 
 /// App-wide navigation and shared state, provided as context.
 #[derive(Clone, Copy)]
 pub struct Nav {
-    open_show: RwSignal<Option<u64>>,
+    overlays: RwSignal<Vec<Overlay>>,
     /// Bumped when data changes (episode marked, label set) so lists reload.
     pub changed: RwSignal<u32>,
     pub sort: RwSignal<String>,
@@ -22,12 +30,22 @@ pub struct Nav {
 
 impl Nav {
     pub fn open_show(&self, show_id: u64) {
-        api::push_history();
-        self.open_show.set(Some(show_id));
+        self.push(Overlay::Show(show_id));
     }
 
-    /// Goes back through history so the back gesture and the button agree.
-    pub fn close_show(&self) {
+    pub fn open_search(&self) {
+        self.push(Overlay::Search);
+    }
+
+    /// Each overlay gets a history entry so Android's back gesture closes it.
+    fn push(&self, overlay: Overlay) {
+        api::push_history();
+        self.overlays.update(|o| o.push(overlay));
+    }
+
+    /// Closes the top overlay. Goes through history so the back gesture and
+    /// the on-screen back button agree.
+    pub fn close(&self) {
         api::history_back();
     }
 
@@ -192,7 +210,7 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
                                 // Copy inside the tap so the clipboard allows it.
                                 api::copy_to_clipboard(&user_code);
                                 let url = url.clone();
-                                spawn_local(async move { api::open_trakt(&url).await });
+                                spawn_local(async move { api::open_link(&url).await });
                             }
                         >
                             "Copy code & open Trakt"
@@ -234,24 +252,71 @@ impl Tab {
 #[component]
 fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView {
     let tab = RwSignal::new(Tab::Progress);
-    let open_show = RwSignal::new(None::<u64>);
+    let overlays = RwSignal::new(Vec::<Overlay>::new());
     let sort = api::load_pref("sort").unwrap_or_else(|| "recently_watched".into());
-    provide_context(Nav {
-        open_show,
+    let nav = Nav {
+        overlays,
         changed: RwSignal::new(0),
         sort: RwSignal::new(sort),
         version,
         on_signed_out,
+    };
+    provide_context(nav);
+    // Android's back gesture (and the on-screen back buttons) pop the history
+    // entry pushed when an overlay opened.
+    let _ = window_event_listener_untyped("popstate", move |_| {
+        overlays.update(|o| {
+            o.pop();
+        })
     });
-    // Android's back gesture (and the page's back button) pop the history
-    // entry pushed when the show page opened.
-    let _ = window_event_listener_untyped("popstate", move |_| open_show.set(None));
+
+    // Once per launch: is there a newer release on GitHub?
+    let update = RwSignal::new(None::<api::Release>);
+    spawn_local(async move {
+        if let Ok(Some(release)) = api::call::<Option<api::Release>>("check_update", ()).await {
+            update.set(Some(release));
+        }
+    });
+    let update_banner = move || {
+        update.get().map(|release| {
+            let url = release.apk_url.unwrap_or(release.page_url);
+            view! {
+                <div class="update">
+                    <span>{format!("Nextep {} is available", release.version)}</span>
+                    <button
+                        class="pill"
+                        on:click=move |_| {
+                            let url = url.clone();
+                            spawn_local(async move { api::open_link(&url).await });
+                        }
+                    >
+                        "Update"
+                    </button>
+                    <button class="icon" aria-label="Dismiss" on:click=move |_| update.set(None)>
+                        "✕"
+                    </button>
+                </div>
+            }
+        })
+    };
+
+    // Keyed by position and page so pages underneath keep their state (e.g.
+    // search results) while a show is opened on top.
+    let overlay_stack = move || overlays.get().into_iter().enumerate().collect::<Vec<_>>();
+    let render_overlay = |(_, overlay): (usize, Overlay)| match overlay {
+        Overlay::Search => view! { <SearchPage/> }.into_any(),
+        Overlay::Show(show_id) => view! { <ShowPage show_id/> }.into_any(),
+    };
 
     view! {
         <main class="screen">
             <header class="top">
                 <h1>{move || tab.get().label()}</h1>
+                <button class="icon" aria-label="Search" on:click=move |_| nav.open_search()>
+                    <SearchIcon/>
+                </button>
             </header>
+            {update_banner}
             <section class="content">
                 {move || match tab.get() {
                     Tab::Progress => view! { <Progress/> }.into_any(),
@@ -271,8 +336,26 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
                     })
                     .collect_view()}
             </nav>
-            {move || open_show.get().map(|show_id| view! { <ShowPage show_id/> })}
+            <For each=overlay_stack key=|entry| *entry children=render_overlay/>
         </main>
+    }
+}
+
+#[component]
+pub fn SearchIcon() -> impl IntoView {
+    view! {
+        <svg
+            viewBox="0 0 24 24"
+            width="22"
+            height="22"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linecap="round"
+        >
+            <circle cx="11" cy="11" r="7"></circle>
+            <path d="m20 20-3.6-3.6"></path>
+        </svg>
     }
 }
 

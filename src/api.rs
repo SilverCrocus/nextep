@@ -24,12 +24,13 @@ pub async fn call<T: DeserializeOwned>(cmd: &str, args: impl Serialize) -> Resul
     serde_wasm_bindgen::from_value(value).map_err(|e| e.to_string())
 }
 
-pub async fn open_trakt(url: &str) {
+/// Opens a Trakt or Nextep release link in the browser.
+pub async fn open_link(url: &str) {
     #[derive(Serialize)]
     struct Args<'a> {
         url: &'a str,
     }
-    let _ = call::<()>("open_trakt", Args { url }).await;
+    let _ = call::<()>("open_link", Args { url }).await;
 }
 
 pub async fn mark_watched(episode_id: u64) -> Result<(), String> {
@@ -51,7 +52,24 @@ pub async fn set_show_status(show_id: u64, status: Option<ShowStatus>) -> Result
     call("set_show_status", Args { show_id, status }).await
 }
 
+pub async fn set_watchlist(show_id: u64, on: bool) -> Result<(), String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        show_id: u64,
+        on: bool,
+    }
+    call("set_watchlist", Args { show_id, on }).await
+}
+
 // ---- data (only the fields the UI uses) ------------------------------------
+
+#[derive(Clone, Deserialize)]
+pub struct Release {
+    pub version: String,
+    pub page_url: String,
+    pub apk_url: Option<String>,
+}
 
 #[derive(Clone, Deserialize)]
 pub struct Status {
@@ -150,6 +168,17 @@ pub struct LibraryView {
     pub watchlist: Vec<Card>,
 }
 
+#[derive(Clone, Deserialize)]
+pub struct SearchItem {
+    pub show_id: u64,
+    pub title: String,
+    pub year: Option<i32>,
+    pub network: Option<String>,
+    pub poster: Option<String>,
+    pub watched: bool,
+    pub on_watchlist: bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShowStatus {
@@ -180,6 +209,7 @@ pub struct ShowDetails {
     pub poster: Option<String>,
     pub backdrop: Option<String>,
     pub status: Option<ShowStatus>,
+    pub on_watchlist: bool,
     pub aired: u32,
     pub completed: u32,
     pub next_episode: Option<Episode>,

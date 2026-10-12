@@ -18,8 +18,9 @@ what gets used daily stays, the rest is cut or deferred.
       seasons with watched progress, mark individual episodes watched
 - [x] **Library**: Watching, Up to date, On hold, Dropped, Finished, Watchlist
 - [x] Artwork from TMDB (cached)
-- [ ] **Search** shows and add to watchlist
-- [ ] Sync On hold / Dropped to Trakt so they survive a reinstall
+- [x] **Search** shows and add to watchlist
+- [x] On hold / Dropped saved on Trakt (hidden from progress / dropped)
+- [x] Updates: signed releases on GitHub, Obtainium support, in-app banner
 - [ ] Local cache (SQLite) so the app opens instantly and works offline
 
 ## Later

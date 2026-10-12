@@ -16,7 +16,9 @@ use reqwest::{Method, RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
-use crate::models::{CalendarEntry, Season, Show, ShowProgress, WatchedShow, WatchlistShow};
+use crate::models::{
+    CalendarEntry, HiddenShow, SearchResult, Season, Show, ShowProgress, WatchedShow, WatchlistShow,
+};
 use crate::{Error, Result};
 
 pub const API_URL: &str = "https://api.trakt.tv";
@@ -157,16 +159,88 @@ impl TraktClient {
         episode_trakt_id: u64,
         watched_at: DateTime<Utc>,
     ) -> Result<()> {
-        let req = self.authed(Method::POST, "/sync/history")?.json(&json!({
+        let body = json!({
             "episodes": [{
                 "ids": { "trakt": episode_trakt_id },
                 "watched_at": watched_at.to_rfc3339(),
             }]
-        }));
-        check(req.send().await?).await.map(drop)
+        });
+        self.post("/sync/history", body).await
+    }
+
+    pub async fn add_to_watchlist(&self, show_trakt_id: u64) -> Result<()> {
+        self.post("/sync/watchlist", shows_body(show_trakt_id))
+            .await
+    }
+
+    pub async fn remove_from_watchlist(&self, show_trakt_id: u64) -> Result<()> {
+        self.post("/sync/watchlist/remove", shows_body(show_trakt_id))
+            .await
+    }
+
+    // ---- hidden items -----------------------------------------------------
+
+    /// Shows hidden in one of Trakt's hidden sections (`progress_watched`,
+    /// `dropped`, ...), across all pages.
+    pub async fn hidden_shows(&self, section: &str) -> Result<Vec<HiddenShow>> {
+        const PAGE_SIZE: usize = 250;
+        let mut all = Vec::new();
+        for page in 1..=20 {
+            let path = format!("/users/hidden/{section}?type=show&limit={PAGE_SIZE}&page={page}");
+            let batch: Vec<HiddenShow> = send_json(self.authed(Method::GET, &path)?).await?;
+            let last = batch.len() < PAGE_SIZE;
+            all.extend(batch);
+            if last {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
+    pub async fn hide_show(&self, section: &str, show_trakt_id: u64) -> Result<()> {
+        self.post(
+            &format!("/users/hidden/{section}"),
+            shows_body(show_trakt_id),
+        )
+        .await
+    }
+
+    pub async fn unhide_show(&self, section: &str, show_trakt_id: u64) -> Result<()> {
+        let path = format!("/users/hidden/{section}/remove");
+        self.post(&path, shows_body(show_trakt_id)).await
+    }
+
+    // ---- search -----------------------------------------------------------
+
+    pub async fn search_shows(&self, query: &str) -> Result<Vec<SearchResult>> {
+        let req = self.authed(Method::GET, "/search/show")?.query(&[
+            ("query", query),
+            ("extended", "full"),
+            ("limit", "20"),
+        ]);
+        send_json(req).await
     }
 
     // ---- plumbing ---------------------------------------------------------
+
+    /// Writes are limited to one per second; on a 429 wait as told and retry
+    /// once.
+    async fn post(&self, path: &str, body: serde_json::Value) -> Result<()> {
+        let res = self.authed(Method::POST, path)?.json(&body).send().await?;
+        if res.status() != StatusCode::TOO_MANY_REQUESTS {
+            return check(res).await.map(drop);
+        }
+        let wait = res
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(1)
+            .min(10);
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        let res = self.authed(Method::POST, path)?.json(&body).send().await?;
+        check(res).await.map(drop)
+    }
 
     fn oauth(&self, path: &str) -> RequestBuilder {
         self.http.post(format!("{}{path}", self.auth_url))
@@ -198,6 +272,10 @@ async fn check(res: reqwest::Response) -> Result<reqwest::Response> {
 
 async fn send_json<T: DeserializeOwned>(req: RequestBuilder) -> Result<T> {
     Ok(check(req.send().await?).await?.json().await?)
+}
+
+fn shows_body(show_trakt_id: u64) -> serde_json::Value {
+    json!({ "shows": [{ "ids": { "trakt": show_trakt_id } }] })
 }
 
 #[cfg(test)]

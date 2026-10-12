@@ -126,6 +126,20 @@ pub struct CalendarEntry {
     pub show: Show,
 }
 
+/// One entry of `GET /users/hidden/{section}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HiddenShow {
+    pub hidden_at: Option<DateTime<Utc>>,
+    pub show: Option<Show>,
+}
+
+/// One entry of `GET /search/show`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub score: Option<f64>,
+    pub show: Show,
+}
+
 /// One entry of `GET /sync/watchlist/shows`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WatchlistShow {

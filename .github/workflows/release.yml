@@ -1,0 +1,78 @@
+name: Release
+
+# Push a tag like v0.2.0 to build a signed APK and publish it as a GitHub
+# release. Obtainium and the in-app update check pick it up from there.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: 30.0.16248370
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the app version
+        run: |
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tauri_version=$(jq -r .version src-tauri/tauri.conf.json)
+          for v in "$cargo_version" "$tauri_version"; do
+            test "v$v" = "$GITHUB_REF_NAME" || {
+              echo "Tag $GITHUB_REF_NAME does not match version $v (Cargo.toml / tauri.conf.json)"
+              exit 1
+            }
+          done
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager "ndk;$NDK_VERSION"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install trunk and tauri-cli
+        run: |
+          cargo binstall -y trunk
+          cargo binstall -y tauri-cli --version '^2'
+
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          printf 'keyAlias=nextep\npassword=%s\nstoreFile=%s\n' \
+            "$KEYSTORE_PASSWORD" "$RUNNER_TEMP/release.jks" \
+            > src-tauri/gen/android/keystore.properties
+
+      - name: Build APK
+        env:
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          cargo tauri android build --apk --target aarch64
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+            "nextep-${GITHUB_REF_NAME#v}.apk"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: nextep-*.apk
+          generate_release_notes: true
