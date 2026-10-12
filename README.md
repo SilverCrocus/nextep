@@ -54,9 +54,12 @@ Copy `.env.example` to `.env` and fill in:
 With USB debugging enabled and the phone connected:
 
 ```sh
-cargo tauri android init   # first time only
-cargo tauri android dev
+cargo tauri android build --debug --apk --target aarch64
+adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
 ```
+
+The generated Android project lives in `src-tauri/gen/android` and is
+committed, so `cargo tauri android init` is not needed after cloning.
 
 ## License
 
