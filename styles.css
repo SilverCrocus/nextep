@@ -24,6 +24,19 @@ body {
   background: var(--bg);
 }
 
+/* The app draws behind Android's status bar; keep scrolled content from
+   showing through under the clock and icons. */
+body::before {
+  content: "";
+  position: fixed;
+  z-index: 10;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top);
+  background: var(--bg);
+}
+
 .screen {
   display: flex;
   flex-direction: column;
@@ -43,7 +56,8 @@ body {
 
 .content {
   flex: 1;
-  padding: 0 16px 96px;
+  /* Clear the floating tab bar and Android's gesture area. */
+  padding: 0 16px calc(140px + env(safe-area-inset-bottom));
 }
 
 .empty {

@@ -43,6 +43,15 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
+/// True while the app is in the background (`document.hidden`).
+fn page_hidden() -> bool {
+    js_sys::Reflect::get(&js_sys::global(), &"document".into())
+        .and_then(|doc| js_sys::Reflect::get(&doc, &"hidden".into()))
+        .ok()
+        .and_then(|hidden| hidden.as_bool())
+        .unwrap_or(false)
+}
+
 // ---- data from the backend (only the fields the UI uses) -------------------
 
 #[derive(Clone, Deserialize)]
@@ -165,22 +174,36 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
             struct Args<'a> {
                 device_code: &'a str,
             }
-            let mut interval = dc.interval.max(1);
-            let mut waited = 0;
+            // Wall-clock time, because Android pauses timers while the app is
+            // in the background.
+            let started = js_sys::Date::now();
+            let expires_ms = f64::from(dc.expires_in) * 1000.0;
+            let mut interval_ms = f64::from(dc.interval.max(1)) * 1000.0;
+            let mut last_poll = started;
+            let mut was_hidden = false;
             let mut failures = 0;
             let outcome = loop {
-                if waited >= dc.expires_in {
+                TimeoutFuture::new(1000).await;
+                let now = js_sys::Date::now();
+                if now - started >= expires_ms {
                     break "The code expired. Try again.".to_string();
                 }
-                TimeoutFuture::new(interval * 1000).await;
-                waited += interval;
+                // Poll on schedule, or right away when the user comes back
+                // from approving in the browser.
+                let hidden = page_hidden();
+                let came_back = was_hidden && !hidden;
+                was_hidden = hidden;
+                if now - last_poll < interval_ms && !came_back {
+                    continue;
+                }
+                last_poll = now;
                 let args = Args {
                     device_code: &dc.device_code,
                 };
                 match call::<String>("sign_in_poll", args).await.as_deref() {
                     Ok("signed_in") => return on_signed_in.run(()),
                     Ok("pending") => failures = 0,
-                    Ok("slow_down") => interval += 5,
+                    Ok("slow_down") => interval_ms += 5000.0,
                     Ok("denied") => break "Sign-in was declined on Trakt.".into(),
                     Ok(_) => break "The code expired. Try again.".into(),
                     // Usually a connection dropped while Android had the app
