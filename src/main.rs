@@ -7,6 +7,7 @@ mod lists;
 mod progress;
 mod pull;
 mod search;
+mod settings;
 mod show;
 
 use app::App;

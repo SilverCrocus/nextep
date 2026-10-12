@@ -229,6 +229,39 @@ pub struct SearchResult {
     pub show: Show,
 }
 
+/// `GET /shows/{id}/people`: cast, and crew by department ("created by",
+/// "directing", "writing", ...).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShowPeople {
+    #[serde(default)]
+    pub cast: Option<Vec<CastMember>>,
+    #[serde(default)]
+    pub crew: Option<std::collections::HashMap<String, Vec<CrewMember>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CastMember {
+    #[serde(default)]
+    pub characters: Vec<String>,
+    #[serde(default)]
+    pub episode_count: Option<u32>,
+    pub person: Person,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrewMember {
+    #[serde(default)]
+    pub jobs: Vec<String>,
+    #[serde(default)]
+    pub episode_count: Option<u32>,
+    pub person: Person,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Person {
+    pub name: String,
+}
+
 /// One entry of `GET /shows/trending`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrendingShow {

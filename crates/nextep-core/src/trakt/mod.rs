@@ -17,8 +17,8 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::models::{
-    CalendarEntry, HiddenShow, HistoryEntry, ListedShow, SearchResult, Season, Show, ShowProgress,
-    TraktList, TrendingShow, UserSettings, UserStats, WatchedShow, WatchlistShow,
+    CalendarEntry, HiddenShow, HistoryEntry, ListedShow, SearchResult, Season, Show, ShowPeople,
+    ShowProgress, TraktList, TrendingShow, UserSettings, UserStats, WatchedShow, WatchlistShow,
 };
 use crate::{Error, Result};
 
@@ -284,6 +284,10 @@ impl TraktClient {
     pub async fn related_shows(&self, show_trakt_id: u64, limit: u32) -> Result<Vec<Show>> {
         let path = format!("/shows/{show_trakt_id}/related?limit={limit}&extended=full");
         send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn show_people(&self, show_trakt_id: u64) -> Result<ShowPeople> {
+        send_json(self.authed(Method::GET, &format!("/shows/{show_trakt_id}/people"))?).await
     }
 
     pub async fn trending_shows(&self, limit: u32) -> Result<Vec<TrendingShow>> {

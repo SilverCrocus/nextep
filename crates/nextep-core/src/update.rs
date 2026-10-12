@@ -65,6 +65,22 @@ pub async fn check(current: &str) -> Result<Option<Release>> {
     }))
 }
 
+/// Downloads a release asset (follows GitHub's redirect to its file host).
+pub async fn download(url: &str) -> Result<Vec<u8>> {
+    let res = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", concat!("Nextep/", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        return Err(Error::Api {
+            status: res.status().as_u16(),
+            body: "Couldn't download the update.".into(),
+        });
+    }
+    Ok(res.bytes().await?.to_vec())
+}
+
 /// Compares `major.minor.patch` versions. Anything unparsable is not newer.
 pub fn is_newer(candidate: &str, current: &str) -> bool {
     fn parse(v: &str) -> Option<(u64, u64, u64)> {

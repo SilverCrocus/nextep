@@ -3,6 +3,8 @@
 //! Everything that does not touch the UI lives here so it can be unit tested on
 //! the host and reused by the Tauri shell on Android.
 
+pub mod ai;
+pub mod ai_tools;
 pub mod labels;
 pub mod models;
 pub mod progress;

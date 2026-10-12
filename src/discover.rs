@@ -2,8 +2,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
 
-use crate::api::{self, DiscoverItem, DiscoverView};
+use crate::api::{self, AiPick, DiscoverItem, DiscoverView};
 use crate::app::{Poster, nav};
+use crate::settings::load_ai_settings;
 
 /// Shows you haven't watched, in shelves: picked by the on-device taste
 /// model, related to what you watched last, Trakt's picks, and trending.
@@ -58,6 +59,7 @@ pub fn Discover() -> impl IntoView {
     });
 
     view! {
+        <AskAi/>
         {move || error.get().map(|e| view! { <p class="warn">{e}</p> })}
         {move || match data.get() {
             None => view! { <p class="hint">"Finding shows for you…"</p> }.into_any(),
@@ -103,5 +105,131 @@ fn ShelfCard(item: DiscoverItem) -> impl IntoView {
             <span class="card-title">{item.title}</span>
             <span class="card-note">{item.year.map(|y| y.to_string()).unwrap_or_default()}</span>
         </button>
+    }
+}
+
+/// "What are you in the mood for?" box: the configured AI picks from the
+/// Discover candidates and says why.
+#[component]
+fn AskAi() -> impl IntoView {
+    let nav = nav();
+    let configured = RwSignal::new(None::<bool>);
+    let mood = RwSignal::new(String::new());
+    let picks = RwSignal::new(None::<Vec<AiPick>>);
+    let error = RwSignal::new(None::<String>);
+    let asking = RwSignal::new(false);
+    // Seconds spent thinking; maximum thinking can take a minute or more.
+    let elapsed = RwSignal::new(0u32);
+
+    // Re-check when settings change (e.g. a key was just saved).
+    Effect::new(move |_| {
+        nav.changed.track();
+        spawn_local(async move {
+            configured.set(Some(load_ai_settings().await.is_ok_and(|s| s.configured)));
+        });
+    });
+
+    let ask = move || {
+        #[derive(Serialize)]
+        struct Args {
+            mood: String,
+        }
+        let text = mood.get_untracked();
+        if text.trim().is_empty() || asking.get_untracked() {
+            return;
+        }
+        asking.set(true);
+        error.set(None);
+        elapsed.set(0);
+        spawn_local(async move {
+            while asking.get_untracked() {
+                gloo_timers::future::TimeoutFuture::new(1000).await;
+                elapsed.update(|s| *s += 1);
+            }
+        });
+        spawn_local(async move {
+            match api::call::<Vec<AiPick>>("ai_picks", Args { mood: text }).await {
+                Ok(list) => picks.set(Some(list)),
+                Err(e) => nav.report(e, error),
+            }
+            asking.set(false);
+        });
+    };
+
+    move || {
+        match configured.get() {
+        None => ().into_any(),
+        Some(false) => view! {
+            <div class="ai-box">
+                <p class="show">"AI picks"</p>
+                <p class="hint small">
+                    "Describe a mood and an AI picks from these shows and says why. Add a DeepSeek (or other OpenAI-compatible) API key to turn it on."
+                </p>
+                <button class="pill" on:click=move |_| nav.open_settings()>"Add a key in Settings"</button>
+            </div>
+        }
+        .into_any(),
+        Some(true) => view! {
+            <div class="ai-box">
+                <form
+                    class="inline-form"
+                    on:submit=move |ev| {
+                        ev.prevent_default();
+                        ask();
+                    }
+                >
+                    <input
+                        type="text"
+                        enterkeyhint="send"
+                        placeholder="What are you in the mood for?"
+                        prop:value=move || mood.get()
+                        on:input=move |ev| mood.set(event_target_value(&ev))
+                    />
+                    <button class="pill on" type="submit" disabled=move || asking.get() || mood.get().trim().is_empty()>
+                        {move || {
+                            if asking.get() { format!("Thinking… {}s", elapsed.get()) } else { "Ask AI".to_string() }
+                        }}
+                    </button>
+                </form>
+                {move || error.get().map(|e| view! { <p class="warn">{e}</p> })}
+                {move || {
+                    picks.get().map(|list| {
+                        view! {
+                            <ul class="list">
+                                {list.into_iter().map(|pick| view! { <AiPickRow pick/> }).collect_view()}
+                            </ul>
+                        }
+                    })
+                }}
+            </div>
+        }
+        .into_any(),
+    }
+    }
+}
+
+#[component]
+fn AiPickRow(pick: AiPick) -> impl IntoView {
+    let nav = nav();
+    let show_id = pick.show_id;
+    let meta = [
+        pick.year.map(|y| y.to_string()),
+        pick.match_pct.map(|m| format!("{m}% match")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
+    view! {
+        <li class="row">
+            <div class="tap" on:click=move |_| nav.open_show(show_id)>
+                <Poster src=pick.poster class="thumb"/>
+                <div class="info">
+                    <p class="show">{pick.title}</p>
+                    <p class="meta">{meta}</p>
+                    <p class="reason">{pick.reason}</p>
+                </div>
+            </div>
+        </li>
     }
 }

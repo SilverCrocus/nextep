@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use nextep_core::ai::AiConfig;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::{Labels, ShowStatus};
 use nextep_core::models::TraktList;
@@ -24,6 +25,8 @@ const PROGRESS_FILE: &str = "progress_cache.json";
 const LABELS_FILE: &str = "labels.json";
 const ARTWORK_FILE: &str = "artwork_cache.json";
 const SNAPSHOT_PREFIX: &str = "snapshot_";
+/// AI provider settings, including the user's API key. Device-only.
+const AI_FILE: &str = "ai_settings.json";
 
 /// Switching between tabs reuses a refresh this recent instead of calling
 /// Trakt again.
@@ -43,6 +46,7 @@ pub struct AppState {
     /// Personal lists, and the shows on each list once loaded.
     lists: Mutex<Option<(DateTime<Utc>, Vec<TraktList>)>>,
     list_members: Mutex<HashMap<u64, HashSet<u64>>>,
+    ai: Mutex<Option<AiConfig>>,
 }
 
 impl AppState {
@@ -59,6 +63,7 @@ impl AppState {
             watchlist: Mutex::new(None),
             lists: Mutex::new(None),
             list_members: Mutex::new(HashMap::new()),
+            ai: Mutex::new(read(&dir, AI_FILE)),
             dir,
         }
     }
@@ -88,6 +93,22 @@ impl AppState {
     pub fn snapshot<T: DeserializeOwned>(&self, name: &str) -> Result<T, String> {
         read(&self.dir, &format!("{SNAPSHOT_PREFIX}{name}.json"))
             .ok_or_else(|| "no_snapshot".into())
+    }
+
+    pub async fn ai_config(&self) -> Option<AiConfig> {
+        self.ai.lock().await.clone()
+    }
+
+    /// `None` removes the saved provider and key.
+    pub async fn set_ai_config(&self, config: Option<AiConfig>) -> Result<(), String> {
+        match &config {
+            Some(config) => self.save(AI_FILE, config)?,
+            None => {
+                let _ = fs::remove_file(self.dir.join(AI_FILE));
+            }
+        }
+        *self.ai.lock().await = config;
+        Ok(())
     }
 
     pub fn tmdb(&self) -> Option<&TmdbClient> {

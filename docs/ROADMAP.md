@@ -35,10 +35,14 @@ what gets used daily stays, the rest is cut or deferred.
   - [x] "Would I like it?" model: a small on-device decision model trained on
         your own history (finished / watching = liked, dropped / on hold =
         not), scoring candidates by genre, network, rating, year and length
-  - [ ] Optional AI picks: describe a mood and an OpenAI-compatible API
-        (e.g. DeepSeek) ranks and explains real candidates from the rows
-        above. Bring-your-own key, stored only on the device; sends recent
-        watch history to that provider
+  - [x] Optional AI picks: describe a mood and an OpenAI-compatible API
+        (DeepSeek by default, deepseek-flash with adjustable thinking) picks
+        and explains real candidates from the rows above. It calls tools to
+        look at your history (recent 5/10/15/25 shows, taste profile,
+        dropped shows) and cast & crew (show_people, favourite_people).
+        Bring-your-own key, stored only on the device
+- [x] In-app updates: the update banner downloads the release and opens
+      Android's installer (no browser or Obtainium needed)
 - [ ] **Movies**: watchlist, watched, progress-style "to watch", search,
       movie pages, Calendar releases
 - [ ] New-episode notifications

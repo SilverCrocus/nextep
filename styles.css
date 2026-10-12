@@ -650,8 +650,11 @@ select {
   background: var(--surface);
 }
 
-.update span {
+.update-text {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 2px;
   font-size: 0.9rem;
 }
 
@@ -872,4 +875,59 @@ select {
 
 .tabs button {
   font-size: 0.9rem;
+}
+
+/* ---- settings & AI ---- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.field-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.field input,
+.field select {
+  padding: 10px 14px;
+  border: 1px solid #3a3a3a;
+  border-radius: 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+}
+
+.ai-box {
+  margin: 8px 0 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.ai-box .inline-form {
+  margin-top: 0;
+}
+
+.ai-box .inline-form input {
+  background: var(--bg);
+}
+
+.ai-box p {
+  margin: 0 0 8px;
+}
+
+.reason {
+  margin-top: 4px !important;
+  white-space: normal !important;
+  font-size: 0.9rem;
+  color: #d0d0d0;
+}
+
+.footer .ghost + .ghost {
+  margin-top: -4px;
 }

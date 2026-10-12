@@ -155,6 +155,7 @@ pub fn Library() -> impl IntoView {
         }}
         <StatsStrip/>
         <div class="footer">
+            <button class="ghost" on:click=move |_| nav.open_settings()>"Settings"</button>
             <button class="ghost" on:click=sign_out>"Sign out of Trakt"</button>
             <p class="version">{move || format!("Nextep v{}", nav.version.get())}</p>
         </div>

@@ -187,6 +187,16 @@ pub struct HistoryItem {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct AiPick {
+    pub show_id: u64,
+    pub title: String,
+    pub year: Option<i32>,
+    pub poster: Option<String>,
+    pub reason: String,
+    pub match_pct: Option<u8>,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct DiscoverItem {
     pub show_id: u64,
     pub title: String,

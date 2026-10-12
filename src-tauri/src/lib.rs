@@ -1,4 +1,5 @@
 mod commands;
+mod installer;
 mod state;
 
 use std::fs;
@@ -14,6 +15,7 @@ const TMDB_API_KEY: Option<&str> = option_env!("TMDB_API_KEY");
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(installer::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             fs::create_dir_all(&dir)?;
@@ -31,6 +33,7 @@ pub fn run() {
             commands::sign_out,
             commands::open_link,
             commands::check_update,
+            installer::install_update,
             commands::progress,
             commands::mark_watched,
             commands::set_show_status,
@@ -38,6 +41,11 @@ pub fn run() {
             commands::history,
             commands::stats,
             commands::discover,
+            commands::ai_settings,
+            commands::ai_models,
+            commands::save_ai_settings,
+            commands::clear_ai_key,
+            commands::ai_picks,
             commands::lists,
             commands::list_detail,
             commands::create_list,

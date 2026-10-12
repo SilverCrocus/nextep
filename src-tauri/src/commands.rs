@@ -4,7 +4,8 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
-use nextep_core::Error;
+use nextep_core::ai;
+use nextep_core::ai_tools::ToolBox;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::ShowStatus;
 use nextep_core::models::{Episode, Show, TraktList};
@@ -15,6 +16,7 @@ use nextep_core::taste::{self, TasteModel};
 use nextep_core::tmdb::{Provider, Size};
 use nextep_core::trakt::{DeviceCode, DevicePoll};
 use nextep_core::update::{self, Release};
+use nextep_core::{Error, TraktClient};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -496,37 +498,32 @@ pub struct DiscoverView {
     learned_from: usize,
 }
 
-/// Rows of shows you haven't watched: picked by the on-device taste model,
-/// related to what you watched last, Trakt's recommendations, and trending.
-#[tauri::command]
-pub async fn discover(
-    state: State<'_, AppState>,
-    force: Option<bool>,
-    cached: Option<bool>,
-) -> Result<DiscoverView, String> {
-    if cached.unwrap_or(false) {
-        return state.snapshot("discover");
-    }
-    let client = state.signed_in_client().await?;
-    let mut items = state.items(force.unwrap_or(false)).await?;
-    let now = Utc::now();
+/// Everything Discover and AI picks need: the taste model and candidate rows.
+struct Discovery {
+    model: TasteModel,
+    examples: usize,
+    rows: Vec<(String, Vec<Show>)>,
+}
 
+async fn gather(state: &AppState, client: &TraktClient, force: bool) -> Result<Discovery, String> {
+    let mut items = state.items(force).await?;
+    let now = Utc::now();
+    items.sort_by_key(|i| Reverse(i.last_watched_at));
     // Train on your history, including shows hidden without watching.
     let labels = state.labels.lock().await;
-    let mut examples: Vec<(Vec<String>, bool)> = items
-        .iter()
-        .filter_map(|i| {
-            let status = i.show.ids.trakt.and_then(|id| labels.status(id));
-            Some((taste::features(&i.show), taste::label(i, status, now)?))
-        })
-        .collect();
+    let mut examples: Vec<(Vec<String>, bool)> = Vec::new();
+    for item in &items {
+        let status = item.show.ids.trakt.and_then(|id| labels.status(id));
+        if let Some(label) = taste::label(item, status, now) {
+            examples.push((taste::features(&item.show), label));
+        }
+    }
     let watched: HashSet<u64> = items.iter().filter_map(|i| i.show.ids.trakt).collect();
-    examples.extend(
-        labels
-            .iter()
-            .filter(|(id, _)| !watched.contains(id))
-            .filter_map(|(_, l)| Some((taste::features(l.show.as_ref()?), false))),
-    );
+    for (_, label) in labels.iter().filter(|(id, _)| !watched.contains(id)) {
+        if let Some(show) = &label.show {
+            examples.push((taste::features(show), false));
+        }
+    }
     let exclude: HashSet<u64> = watched
         .iter()
         .copied()
@@ -536,7 +533,6 @@ pub async fn discover(
     let model = TasteModel::train(&examples);
 
     // The three shows watched most recently seed "Because you watched".
-    items.sort_by_key(|i| Reverse(i.last_watched_at));
     let recent: Vec<Show> = items
         .iter()
         .filter(|i| i.show.ids.trakt.is_some())
@@ -601,16 +597,54 @@ pub async fn discover(
     rows.push(("Trending".into(), fresh(trending)));
     rows.retain(|(_, shows)| !shows.is_empty());
 
+    Ok(Discovery {
+        examples: examples.len(),
+        model,
+        rows,
+    })
+}
+
+fn match_pct(model: &TasteModel, show: &Show) -> Option<u8> {
+    model
+        .is_useful()
+        .then(|| (model.score(show) * 100.0).round() as u8)
+}
+
+/// Rows of shows you haven't watched: picked by the on-device taste model,
+/// related to what you watched last, Trakt's recommendations, and trending.
+#[tauri::command]
+pub async fn discover(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+    cached: Option<bool>,
+) -> Result<DiscoverView, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("discover");
+    }
+    let client = state.signed_in_client().await?;
+    let found = gather(&state, &client, force.unwrap_or(false)).await?;
+
     state
-        .fetch_artwork(rows.iter().flat_map(|(_, s)| s).filter_map(|s| s.ids.tmdb))
+        .fetch_artwork(
+            found
+                .rows
+                .iter()
+                .flat_map(|(_, s)| s)
+                .filter_map(|s| s.ids.tmdb),
+        )
         .await;
     let artwork = state.artwork.lock().await;
     let view = DiscoverView {
-        learned_from: if model.is_useful() { examples.len() } else { 0 },
-        rows: rows
-            .into_iter()
+        learned_from: if found.model.is_useful() {
+            found.examples
+        } else {
+            0
+        },
+        rows: found
+            .rows
+            .iter()
             .map(|(title, shows)| DiscoverRow {
-                title,
+                title: title.clone(),
                 items: shows
                     .iter()
                     .filter_map(|s| {
@@ -619,9 +653,7 @@ pub async fn discover(
                             title: s.display_title().to_owned(),
                             year: s.year,
                             poster: artwork.poster_url(s.ids.tmdb, Size::Thumb),
-                            match_pct: model
-                                .is_useful()
-                                .then(|| (model.score(s) * 100.0).round() as u8),
+                            match_pct: match_pct(&found.model, s),
                         })
                     })
                     .collect(),
@@ -631,6 +663,181 @@ pub async fn discover(
     drop(artwork);
     state.save_snapshot("discover", &view);
     Ok(view)
+}
+
+// ---- AI picks -----------------------------------------------------------------
+
+/// Settings as the UI sees them; the key itself never goes back to the UI.
+#[derive(Serialize)]
+pub struct AiSettingsView {
+    configured: bool,
+    base_url: String,
+    model: String,
+    reasoning_effort: String,
+    /// Last four characters of the saved key, to recognise it.
+    key_hint: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ai_settings(state: State<'_, AppState>) -> Result<AiSettingsView, String> {
+    let config = state.ai_config().await;
+    Ok(AiSettingsView {
+        configured: config.as_ref().is_some_and(|c| !c.api_key.is_empty()),
+        base_url: config
+            .as_ref()
+            .map_or(ai::DEFAULT_BASE_URL.into(), |c| c.base_url.clone()),
+        model: config
+            .as_ref()
+            .map_or(ai::DEFAULT_MODEL.into(), |c| c.model.clone()),
+        reasoning_effort: config
+            .as_ref()
+            .map_or(Some(ai::DEFAULT_REASONING_EFFORT.into()), |c| {
+                c.reasoning_effort.clone()
+            })
+            .unwrap_or_default(),
+        key_hint: config.as_ref().and_then(|c| {
+            let chars: Vec<char> = c.api_key.chars().collect();
+            (chars.len() >= 8).then(|| chars[chars.len() - 4..].iter().collect())
+        }),
+    })
+}
+
+/// Checks a key (the new one, or the saved one if `api_key` is empty) by
+/// listing the provider's models.
+#[tauri::command]
+pub async fn ai_models(
+    state: State<'_, AppState>,
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    let config = ai::AiConfig {
+        base_url: base_url.trim().to_owned(),
+        api_key: resolve_key(&state, api_key).await?,
+        model: String::new(),
+        reasoning_effort: None,
+    };
+    ai::list_models(&config).await.map_err(to_ui_error)
+}
+
+/// Saves the provider, model and (if given) a new key. The key is stored only
+/// in this app's private storage on the device.
+#[tauri::command]
+pub async fn save_ai_settings(
+    state: State<'_, AppState>,
+    base_url: String,
+    model: String,
+    reasoning_effort: Option<String>,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    let config = ai::AiConfig {
+        base_url: base_url.trim().to_owned(),
+        api_key: resolve_key(&state, api_key).await?,
+        model: model.trim().to_owned(),
+        // Empty means "provider default".
+        reasoning_effort: reasoning_effort.filter(|e| !e.is_empty()),
+    };
+    state.set_ai_config(Some(config)).await
+}
+
+#[tauri::command]
+pub async fn clear_ai_key(state: State<'_, AppState>) -> Result<(), String> {
+    state.set_ai_config(None).await
+}
+
+async fn resolve_key(state: &AppState, api_key: Option<String>) -> Result<String, String> {
+    match api_key
+        .map(|k| k.trim().to_owned())
+        .filter(|k| !k.is_empty())
+    {
+        Some(key) => Ok(key),
+        None => state
+            .ai_config()
+            .await
+            .map(|c| c.api_key)
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| "Paste an API key first.".into()),
+    }
+}
+
+#[derive(Serialize)]
+pub struct AiPickItem {
+    show_id: u64,
+    title: String,
+    year: Option<i32>,
+    poster: Option<String>,
+    reason: String,
+    match_pct: Option<u8>,
+}
+
+/// Up to ten shows for a mood, chosen by the configured AI from the same
+/// candidates Discover shows.
+#[tauri::command]
+pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<AiPickItem>, String> {
+    let mood = mood.trim();
+    if mood.is_empty() {
+        return Err("Describe what you're in the mood for.".into());
+    }
+    let config = state
+        .ai_config()
+        .await
+        .filter(|c| !c.api_key.is_empty())
+        .ok_or("Add an AI API key in Settings first.")?;
+    let client = state.signed_in_client().await?;
+    let found = gather(&state, &client, false).await?;
+
+    // Unique candidates, best taste match first, capped to keep requests small.
+    let mut seen = HashSet::new();
+    let mut shows: Vec<&Show> = found
+        .rows
+        .iter()
+        .flat_map(|(_, s)| s)
+        .filter(|s| s.ids.trakt.is_some_and(|id| seen.insert(id)))
+        .collect();
+    if found.model.is_useful() {
+        shows.sort_by(|a, b| found.model.score(b).total_cmp(&found.model.score(a)));
+    }
+    shows.truncate(120);
+    let candidates: Vec<ai::Candidate> = shows
+        .iter()
+        .filter_map(|s| {
+            Some(ai::Candidate {
+                id: s.ids.trakt?,
+                title: s.display_title().to_owned(),
+                year: s.year,
+                genres: s.genres.clone().unwrap_or_default(),
+                overview: s.overview.clone(),
+            })
+        })
+        .collect();
+
+    // The AI looks at your history and cast & crew through these tools.
+    let items = state.items(false).await?;
+    let mut tools = {
+        let labels = state.labels.lock().await;
+        ToolBox::new(&items, &labels, client.clone(), Utc::now())
+    };
+    let picks = ai::pick(&config, mood, &candidates, &mut tools)
+        .await
+        .map_err(to_ui_error)?;
+    if picks.is_empty() {
+        return Err("The AI didn't return any picks. Try describing the mood differently.".into());
+    }
+
+    let artwork = state.artwork.lock().await;
+    Ok(picks
+        .into_iter()
+        .filter_map(|p| {
+            let show = shows.iter().find(|s| s.ids.trakt == Some(p.id))?;
+            Some(AiPickItem {
+                show_id: p.id,
+                title: show.display_title().to_owned(),
+                year: show.year,
+                poster: artwork.poster_url(show.ids.tmdb, Size::Thumb),
+                reason: p.reason,
+                match_pct: match_pct(&found.model, show),
+            })
+        })
+        .collect())
 }
 
 // ---- lists ------------------------------------------------------------------

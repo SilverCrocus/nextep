@@ -11,6 +11,7 @@ use crate::lists::ListPage;
 use crate::progress::Progress;
 use crate::pull::PullToRefresh;
 use crate::search::SearchPage;
+use crate::settings::SettingsPage;
 use crate::show::ShowPage;
 
 /// Full-screen pages shown over the tabs, newest last.
@@ -19,6 +20,7 @@ enum Overlay {
     Search,
     Show(u64),
     List(u64),
+    Settings,
 }
 
 /// App-wide navigation and shared state, provided as context.
@@ -45,6 +47,10 @@ impl Nav {
 
     pub fn open_list(&self, list_id: u64) {
         self.push(Overlay::List(list_id));
+    }
+
+    pub fn open_settings(&self) {
+        self.push(Overlay::Settings);
     }
 
     /// Each overlay gets a history entry so Android's back gesture closes it.
@@ -296,20 +302,46 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
             update.set(Some(release));
         }
     });
+    // Updating downloads inside the app and opens Android's installer.
+    let update_note = RwSignal::new(None::<String>);
+    let updating = RwSignal::new(false);
     let update_banner = move || {
         update.get().map(|release| {
-            let url = release.apk_url.unwrap_or(release.page_url);
+            let version = release.version.clone();
+            let apk_url = release.apk_url.clone();
+            let page_url = release.page_url.clone();
+            let start = move |_| {
+                let Some(url) = apk_url.clone() else {
+                    // No APK attached: fall back to the release page.
+                    let page = page_url.clone();
+                    spawn_local(async move { api::open_link(&page).await });
+                    return;
+                };
+                #[derive(serde::Serialize)]
+                struct Args {
+                    url: String,
+                }
+                updating.set(true);
+                update_note.set(Some("Downloading…".into()));
+                spawn_local(async move {
+                    match api::call::<bool>("install_update", Args { url }).await {
+                        Ok(true) => update_note.set(None),
+                        Ok(false) => update_note.set(Some(
+                            "Allow Nextep to install updates, then come back and tap Update again.".into(),
+                        )),
+                        Err(e) => update_note.set(Some(e)),
+                    }
+                    updating.set(false);
+                });
+            };
             view! {
                 <div class="update">
-                    <span>{format!("Nextep {} is available", release.version)}</span>
-                    <button
-                        class="pill"
-                        on:click=move |_| {
-                            let url = url.clone();
-                            spawn_local(async move { api::open_link(&url).await });
-                        }
-                    >
-                        "Update"
+                    <div class="update-text">
+                        <span>{format!("Nextep {version} is available")}</span>
+                        {move || update_note.get().map(|n| view! { <span class="hint small">{n}</span> })}
+                    </div>
+                    <button class="pill" on:click=start disabled=move || updating.get()>
+                        {move || if updating.get() { "Updating…" } else { "Update" }}
                     </button>
                     <button class="icon" aria-label="Dismiss" on:click=move |_| update.set(None)>
                         "✕"
@@ -326,6 +358,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         Overlay::Search => view! { <SearchPage/> }.into_any(),
         Overlay::Show(show_id) => view! { <ShowPage show_id/> }.into_any(),
         Overlay::List(list_id) => view! { <ListPage list_id/> }.into_any(),
+        Overlay::Settings => view! { <SettingsPage/> }.into_any(),
     };
 
     view! {
