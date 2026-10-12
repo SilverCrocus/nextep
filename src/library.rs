@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
 
-use crate::api::{self, Card, LibraryView};
+use crate::api::{self, Card, LibraryView, Stats};
 use crate::app::{Poster, nav};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -144,6 +144,7 @@ pub fn Library() -> impl IntoView {
                 .into_any()
             }
         }}
+        <StatsStrip/>
         <div class="footer">
             <button class="ghost" on:click=sign_out>"Sign out of Trakt"</button>
             <p class="version">{move || format!("Nextep v{}", nav.version.get())}</p>
@@ -162,4 +163,79 @@ fn CardView(card: Card) -> impl IntoView {
             <span class="card-note">{card.note}</span>
         </button>
     }
+}
+
+/// Totals from Trakt: episodes, time spent, shows and favourite genres.
+#[component]
+fn StatsStrip() -> impl IntoView {
+    #[derive(Serialize)]
+    struct Args {
+        cached: bool,
+    }
+    let nav = nav();
+    let stats = RwSignal::new(None::<Stats>);
+    Effect::new(move |_| {
+        nav.changed.track();
+        nav.refresh.track();
+        spawn_local(async move {
+            if stats.with_untracked(Option::is_none)
+                && let Ok(s) = api::call::<Stats>("stats", Args { cached: true }).await
+            {
+                stats.set(Some(s));
+            }
+            if let Ok(s) = api::call::<Stats>("stats", Args { cached: false }).await {
+                stats.set(Some(s));
+            }
+        });
+    });
+
+    move || {
+        stats.get().map(|s| {
+            let days = s.minutes as f64 / 60.0 / 24.0;
+            let genres = s
+                .top_genres
+                .iter()
+                .map(|g| capitalize(g))
+                .collect::<Vec<_>>()
+                .join(", ");
+            view! {
+                <div class="stats">
+                    <div class="stat">
+                        <span class="stat-value">{format_count(s.episodes)}</span>
+                        <span class="stat-label">"episodes"</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">{format!("{days:.0}")}</span>
+                        <span class="stat-label">"days watched"</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">{format_count(s.shows)}</span>
+                        <span class="stat-label">"shows"</span>
+                    </div>
+                </div>
+                {(!genres.is_empty()).then(|| view! { <p class="hint small center-text">{format!("Mostly {genres}")}</p> })}
+            }
+        })
+    }
+}
+
+/// 4531 → "4,531".
+fn format_count(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }

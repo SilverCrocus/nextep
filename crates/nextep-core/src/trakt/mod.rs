@@ -17,8 +17,8 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::models::{
-    CalendarEntry, HiddenShow, HistoryEntry, SearchResult, Season, Show, ShowProgress, WatchedShow,
-    WatchlistShow,
+    CalendarEntry, HiddenShow, HistoryEntry, SearchResult, Season, Show, ShowProgress, UserStats,
+    WatchedShow, WatchlistShow,
 };
 use crate::{Error, Result};
 
@@ -149,6 +149,10 @@ impl TraktClient {
     pub async fn calendar(&self, start: NaiveDate, days: u32) -> Result<Vec<CalendarEntry>> {
         let path = format!("/calendars/my/shows/{}/{days}", start.format("%Y-%m-%d"));
         send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn user_stats(&self) -> Result<UserStats> {
+        send_json(self.authed(Method::GET, "/users/me/stats")?).await
     }
 
     /// The most recently watched episodes, newest first.

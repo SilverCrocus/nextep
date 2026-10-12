@@ -126,6 +126,24 @@ pub struct CalendarEntry {
     pub show: Show,
 }
 
+/// `GET /users/me/stats` (only the parts Nextep shows).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UserStats {
+    pub shows: ShowStats,
+    pub episodes: EpisodeStats,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShowStats {
+    pub watched: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EpisodeStats {
+    pub watched: u64,
+    pub minutes: u64,
+}
+
 /// One entry of `GET /sync/history/episodes`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryEntry {

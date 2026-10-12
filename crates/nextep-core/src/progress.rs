@@ -60,6 +60,21 @@ impl ProgressItem {
     }
 }
 
+/// The most common genres across shows, most frequent first (ties A to Z).
+pub fn top_genres(items: &[ProgressItem], count: usize) -> Vec<String> {
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for genre in items.iter().flat_map(|i| i.show.genres.iter().flatten()) {
+        *counts.entry(genre.as_str()).or_default() += 1;
+    }
+    let mut genres: Vec<(&str, usize)> = counts.into_iter().collect();
+    genres.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    genres
+        .into_iter()
+        .take(count)
+        .map(|(g, _)| g.to_owned())
+        .collect()
+}
+
 /// Sort key for titles: case-insensitive and ignoring a leading "The ".
 pub fn title_sort_key(title: &str) -> String {
     let title = title.to_lowercase();
@@ -256,6 +271,22 @@ mod tests {
         let view = arrange(items, &ProgressOptions::default(), now());
         assert!(view.upcoming.is_empty());
         assert_eq!(titles(&view.watching), ["Behind"]);
+    }
+
+    #[test]
+    fn top_genres_by_count_then_name() {
+        let with = |genres: &[&str]| {
+            let mut i = item("x", 1, None, None);
+            i.show.genres = Some(genres.iter().map(|g| g.to_string()).collect());
+            i
+        };
+        let items = [
+            with(&["drama", "comedy"]),
+            with(&["drama", "action"]),
+            with(&["comedy"]),
+            with(&["animation"]),
+        ];
+        assert_eq!(top_genres(&items, 3), ["comedy", "drama", "action"]);
     }
 
     #[test]

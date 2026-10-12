@@ -160,6 +160,14 @@ pub struct HistoryItem {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct Stats {
+    pub episodes: u64,
+    pub minutes: u64,
+    pub shows: u64,
+    pub top_genres: Vec<String>,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct Provider {
     pub name: String,
     pub logo: Option<String>,

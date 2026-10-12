@@ -29,7 +29,7 @@ what gets used daily stays, the rest is cut or deferred.
 - [ ] Trakt lists (including third-party lists such as couchmoney and mdblist)
 - [ ] New-episode notifications
 - [ ] Home-screen widget
-- [ ] Statistics (time watched, top genres)
+- [x] Statistics (time watched, top genres), at the bottom of Library
 - [x] Where to stream (JustWatch data via TMDB), on the show page
 - [x] History view (Calendar → History)
 

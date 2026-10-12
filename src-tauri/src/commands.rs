@@ -469,6 +469,34 @@ fn next_note(item: &ProgressItem) -> String {
     }
 }
 
+// ---- statistics -------------------------------------------------------------
+
+#[derive(Serialize, Deserialize)]
+pub struct Stats {
+    episodes: u64,
+    minutes: u64,
+    shows: u64,
+    top_genres: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn stats(state: State<'_, AppState>, cached: Option<bool>) -> Result<Stats, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("stats");
+    }
+    let client = state.signed_in_client().await?;
+    let totals = client.user_stats().await.map_err(to_ui_error)?;
+    let items = state.items(false).await?;
+    let stats = Stats {
+        episodes: totals.episodes.watched,
+        minutes: totals.episodes.minutes,
+        shows: totals.shows.watched,
+        top_genres: progress::top_genres(&items, 3),
+    };
+    state.save_snapshot("stats", &stats);
+    Ok(stats)
+}
+
 // ---- show page --------------------------------------------------------------
 
 #[derive(Serialize)]

@@ -36,6 +36,7 @@ pub fn run() {
             commands::set_show_status,
             commands::calendar,
             commands::history,
+            commands::stats,
             commands::library,
             commands::show_details,
             commands::search,
