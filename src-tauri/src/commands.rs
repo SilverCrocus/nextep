@@ -8,12 +8,12 @@ use nextep_core::ai;
 use nextep_core::ai_context::TasteContext;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::ShowStatus;
-use nextep_core::models::{Episode, Show, TraktList};
+use nextep_core::models::{Episode, Movie, Show, TraktList};
 use nextep_core::progress::{
     self, ProgressItem, ProgressOptions, ProgressView, SortBy, title_sort_key,
 };
 use nextep_core::taste::{self, TasteModel};
-use nextep_core::tmdb::{Media, Provider, Size};
+use nextep_core::tmdb::{ArtworkCache, Media, Provider, Size};
 use nextep_core::trakt::{DeviceCode, DevicePoll};
 use nextep_core::update::{self, Release};
 use nextep_core::{Error, TraktClient};
@@ -563,7 +563,10 @@ fn next_note(item: &ProgressItem) -> String {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DiscoverItem {
-    show_id: u64,
+    /// Trakt id of the show, or of the movie when `movie` is set.
+    id: u64,
+    #[serde(default)]
+    movie: bool,
     title: String,
     year: Option<i32>,
     poster: Option<String>,
@@ -584,18 +587,94 @@ pub struct DiscoverView {
     learned_from: usize,
 }
 
-/// Everything Discover and AI picks need: the taste model and candidate rows.
-struct Discovery {
-    model: TasteModel,
-    examples: usize,
-    rows: Vec<(String, Vec<Show>)>,
+/// A show or movie that Discover or AI picks can suggest.
+#[derive(Clone)]
+struct Suggestion {
+    id: u64,
+    tmdb: Option<u64>,
+    title: String,
+    year: Option<i32>,
+    genres: Vec<String>,
+    overview: Option<String>,
+    /// The taste model's score (0–1), when it knows enough to be shown.
+    score: Option<f64>,
 }
 
-async fn gather(state: &AppState, client: &TraktClient, force: bool) -> Result<Discovery, String> {
+impl Suggestion {
+    fn show(show: &Show, model: &TasteModel) -> Option<Self> {
+        Some(Self {
+            id: show.ids.trakt?,
+            tmdb: show.ids.tmdb,
+            title: show.display_title().to_owned(),
+            year: show.year,
+            genres: show.genres.clone().unwrap_or_default(),
+            overview: show.overview.clone(),
+            score: model.is_useful().then(|| model.score(show)),
+        })
+    }
+
+    fn movie(movie: &Movie, model: &TasteModel) -> Option<Self> {
+        Some(Self {
+            id: movie.ids.trakt?,
+            tmdb: movie.ids.tmdb,
+            title: movie.display_title().to_owned(),
+            year: movie.year,
+            genres: movie.genres.clone().unwrap_or_default(),
+            overview: movie.overview.clone(),
+            score: model.is_useful().then(|| model.score_movie(movie)),
+        })
+    }
+
+    fn item(&self, media: Media, artwork: &ArtworkCache) -> DiscoverItem {
+        DiscoverItem {
+            id: self.id,
+            movie: media == Media::Movie,
+            title: self.title.clone(),
+            year: self.year,
+            poster: artwork.poster(media, self.tmdb, Size::Thumb),
+            match_pct: self.score.map(|s| (s * 100.0).round() as u8),
+        }
+    }
+}
+
+/// Best taste match first; keeps the order when there are no scores.
+fn by_match(mut items: Vec<Suggestion>) -> Vec<Suggestion> {
+    items.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    items
+}
+
+/// Everything Discover and AI picks need: rows of shows or movies you
+/// haven't watched.
+struct Discovery {
+    /// Shows the taste model learned from (0 if it isn't used).
+    learned_from: usize,
+    rows: Vec<(String, Vec<Suggestion>)>,
+}
+
+impl Discovery {
+    /// Every suggestion once, best taste match first.
+    fn unique(&self) -> Vec<Suggestion> {
+        let mut seen = HashSet::new();
+        by_match(
+            self.rows
+                .iter()
+                .flat_map(|(_, items)| items)
+                .filter(|s| seen.insert(s.id))
+                .cloned()
+                .collect(),
+        )
+    }
+}
+
+/// The taste model, trained on your shows (including shows hidden without
+/// watching), and the shows to leave out of suggestions.
+async fn taste_model(
+    state: &AppState,
+    force: bool,
+) -> Result<(TasteModel, usize, Vec<ProgressItem>, HashSet<u64>), String> {
     let mut items = state.items(force).await?;
     let now = Utc::now();
     items.sort_by_key(|i| Reverse(i.last_watched_at));
-    // Train on your history, including shows hidden without watching.
     let labels = state.labels.lock().await;
     let mut examples: Vec<(Vec<String>, bool)> = Vec::new();
     for item in &items {
@@ -615,49 +694,97 @@ async fn gather(state: &AppState, client: &TraktClient, force: bool) -> Result<D
         .copied()
         .chain(labels.iter().map(|(id, _)| id))
         .collect();
-    drop(labels);
     let model = TasteModel::train(&examples);
+    Ok((model, examples.len(), items, exclude))
+}
 
-    // The three shows watched most recently seed "Because you watched".
-    let recent: Vec<Show> = items
-        .iter()
-        .filter(|i| i.show.ids.trakt.is_some())
-        .take(3)
-        .map(|i| i.show.clone())
-        .collect();
+async fn gather(
+    state: &AppState,
+    client: &TraktClient,
+    media: Media,
+    force: bool,
+) -> Result<Discovery, String> {
+    let (model, examples, items, watched_shows) = taste_model(state, force).await?;
 
-    let seeds: Vec<u64> = recent.iter().filter_map(|s| s.ids.trakt).collect();
-    let feeds = feeds(state, client, &seeds, force).await;
-    let recommended = feeds.recommended.unwrap_or_default();
-    let trending = feeds.trending.unwrap_or_default();
-    let related: Vec<Vec<Show>> = seeds
-        .iter()
-        .map(|id| feeds.related.get(id).cloned().unwrap_or_default())
-        .collect();
+    // The three titles watched most recently seed "Because you watched".
+    let (recommended, related, trending, exclude) = match media {
+        Media::Tv => {
+            let recent: Vec<&Show> = items
+                .iter()
+                .map(|i| &i.show)
+                .filter(|s| s.ids.trakt.is_some())
+                .take(3)
+                .collect();
+            let seeds: Vec<u64> = recent.iter().filter_map(|s| s.ids.trakt).collect();
+            let feeds = show_feeds(state, client, &seeds, force).await;
+            let suggest = |shows: Option<&Vec<Show>>| -> Vec<Suggestion> {
+                shows
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|s| Suggestion::show(s, &model))
+                    .collect()
+            };
+            let related = recent
+                .iter()
+                .zip(&seeds)
+                .map(|(s, id)| (s.display_title().to_owned(), suggest(feeds.related.get(id))))
+                .collect::<Vec<_>>();
+            (
+                suggest(feeds.recommended.as_ref()),
+                related,
+                suggest(feeds.trending.as_ref()),
+                watched_shows,
+            )
+        }
+        Media::Movie => {
+            let (mut watched, _) = state.movie_data(client, force).await?;
+            watched.sort_by_key(|w| Reverse(w.last_watched_at));
+            let recent: Vec<&Movie> = watched
+                .iter()
+                .map(|w| &w.movie)
+                .filter(|m| m.ids.trakt.is_some())
+                .take(3)
+                .collect();
+            let seeds: Vec<u64> = recent.iter().filter_map(|m| m.ids.trakt).collect();
+            let feeds = movie_feeds(state, client, &seeds, force).await;
+            let suggest = |movies: Option<&Vec<Movie>>| -> Vec<Suggestion> {
+                movies
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| Suggestion::movie(m, &model))
+                    .collect()
+            };
+            let related = recent
+                .iter()
+                .zip(&seeds)
+                .map(|(m, id)| {
+                    (
+                        m.display_title().to_owned(),
+                        suggest(feeds.related_movies.get(id)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (
+                suggest(feeds.recommended_movies.as_ref()),
+                related,
+                suggest(feeds.trending_movies.as_ref()),
+                watched.iter().filter_map(|w| w.movie.ids.trakt).collect(),
+            )
+        }
+    };
 
-    let fresh = |shows: Vec<Show>| -> Vec<Show> {
+    let fresh = |items: Vec<Suggestion>| -> Vec<Suggestion> {
         let mut seen = HashSet::new();
-        shows
+        items
             .into_iter()
-            .filter(|s| {
-                s.ids
-                    .trakt
-                    .is_some_and(|id| !exclude.contains(&id) && seen.insert(id))
-            })
+            .filter(|s| !exclude.contains(&s.id) && seen.insert(s.id))
             .collect()
     };
-    let by_match = |mut shows: Vec<Show>| -> Vec<Show> {
-        if model.is_useful() {
-            shows.sort_by(|a, b| model.score(b).total_cmp(&model.score(a)));
-        }
-        shows
-    };
-
-    let mut rows: Vec<(String, Vec<Show>)> = Vec::new();
+    let mut rows: Vec<(String, Vec<Suggestion>)> = Vec::new();
     if model.is_useful() {
-        let everything: Vec<Show> = recommended
+        let everything: Vec<Suggestion> = recommended
             .iter()
-            .chain(related.iter().flatten())
+            .chain(related.iter().flat_map(|(_, items)| items))
             .chain(trending.iter())
             .cloned()
             .collect();
@@ -665,26 +792,25 @@ async fn gather(state: &AppState, client: &TraktClient, force: bool) -> Result<D
         picked.truncate(20);
         rows.push(("Picked for you".into(), picked));
     }
-    for (seed, shows) in recent.iter().zip(related) {
+    for (seed, items) in related {
         rows.push((
-            format!("Because you watched {}", seed.display_title()),
-            by_match(fresh(shows)),
+            format!("Because you watched {seed}"),
+            by_match(fresh(items)),
         ));
     }
     rows.push(("Recommended by Trakt".into(), fresh(recommended)));
     rows.push(("Trending".into(), fresh(trending)));
-    rows.retain(|(_, shows)| !shows.is_empty());
+    rows.retain(|(_, items)| !items.is_empty());
 
     Ok(Discovery {
-        examples: examples.len(),
-        model,
+        learned_from: if model.is_useful() { examples } else { 0 },
         rows,
     })
 }
 
 /// Trakt's recommended and trending shows and the shows related to `seeds`,
 /// reusing a recent fetch and fetching only what's missing.
-async fn feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force: bool) -> Feeds {
+async fn show_feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force: bool) -> Feeds {
     let (at, mut feeds) = state.feeds(force).await;
     let missing: Vec<u64> = seeds
         .iter()
@@ -721,64 +847,96 @@ async fn feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force: boo
     feeds
 }
 
-fn match_pct(model: &TasteModel, show: &Show) -> Option<u8> {
-    model
-        .is_useful()
-        .then(|| (model.score(show) * 100.0).round() as u8)
+/// [`show_feeds`] for movies.
+async fn movie_feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force: bool) -> Feeds {
+    let (at, mut feeds) = state.feeds(force).await;
+    let missing: Vec<u64> = seeds
+        .iter()
+        .copied()
+        .filter(|id| !feeds.related_movies.contains_key(id))
+        .collect();
+    let (recommended, trending, related) = futures::join!(
+        async {
+            match &feeds.recommended_movies {
+                Some(_) => None,
+                None => client.recommended_movies(40).await.ok(),
+            }
+        },
+        async {
+            match &feeds.trending_movies {
+                Some(_) => None,
+                None => client.trending_movies(30).await.ok(),
+            }
+        },
+        futures::future::join_all(missing.iter().map(|&id| client.related_movies(id, 20))),
+    );
+    if recommended.is_some() {
+        feeds.recommended_movies = recommended;
+    }
+    if let Some(trending) = trending {
+        feeds.trending_movies = Some(trending.into_iter().map(|t| t.movie).collect());
+    }
+    for (id, movies) in missing.into_iter().zip(related) {
+        if let Ok(movies) = movies {
+            feeds.related_movies.insert(id, movies);
+        }
+    }
+    state.remember_feeds(at, feeds.clone()).await;
+    feeds
 }
 
-/// Rows of shows you haven't watched: picked by the on-device taste model,
-/// related to what you watched last, Trakt's recommendations, and trending.
+fn media(movies: Option<bool>) -> Media {
+    if movies.unwrap_or(false) {
+        Media::Movie
+    } else {
+        Media::Tv
+    }
+}
+
+/// Rows of shows (or, with `movies`, movies) you haven't watched: picked by
+/// the on-device taste model, related to what you watched last, Trakt's
+/// recommendations, and trending.
 #[tauri::command]
 pub async fn discover(
     state: State<'_, AppState>,
     force: Option<bool>,
     cached: Option<bool>,
+    movies: Option<bool>,
 ) -> Result<DiscoverView, String> {
+    let media = media(movies);
+    let snapshot = match media {
+        Media::Tv => "discover",
+        Media::Movie => "discover_movies",
+    };
     if cached.unwrap_or(false) {
-        return state.snapshot("discover");
+        return state.snapshot(snapshot);
     }
     let client = state.signed_in_client().await?;
-    let found = gather(&state, &client, force.unwrap_or(false)).await?;
+    let found = gather(&state, &client, media, force.unwrap_or(false)).await?;
 
-    state
-        .fetch_artwork(
-            found
-                .rows
-                .iter()
-                .flat_map(|(_, s)| s)
-                .filter_map(|s| s.ids.tmdb),
-        )
-        .await;
+    let tmdb_ids = found
+        .rows
+        .iter()
+        .flat_map(|(_, items)| items)
+        .filter_map(|s| s.tmdb);
+    match media {
+        Media::Tv => state.fetch_artwork(tmdb_ids).await,
+        Media::Movie => state.fetch_movie_artwork(tmdb_ids).await,
+    }
     let artwork = state.artwork.lock().await;
     let view = DiscoverView {
-        learned_from: if found.model.is_useful() {
-            found.examples
-        } else {
-            0
-        },
+        learned_from: found.learned_from,
         rows: found
             .rows
             .iter()
-            .map(|(title, shows)| DiscoverRow {
+            .map(|(title, items)| DiscoverRow {
                 title: title.clone(),
-                items: shows
-                    .iter()
-                    .filter_map(|s| {
-                        Some(DiscoverItem {
-                            show_id: s.ids.trakt?,
-                            title: s.display_title().to_owned(),
-                            year: s.year,
-                            poster: artwork.poster_url(s.ids.tmdb, Size::Thumb),
-                            match_pct: match_pct(&found.model, s),
-                        })
-                    })
-                    .collect(),
+                items: items.iter().map(|s| s.item(media, &artwork)).collect(),
             })
             .collect(),
     };
     drop(artwork);
-    state.save_snapshot("discover", &view);
+    state.save_snapshot(snapshot, &view);
     Ok(view)
 }
 
@@ -878,18 +1036,19 @@ async fn resolve_key(state: &AppState, api_key: Option<String>) -> Result<String
 
 #[derive(Serialize)]
 pub struct AiPickItem {
-    show_id: u64,
-    title: String,
-    year: Option<i32>,
-    poster: Option<String>,
+    #[serde(flatten)]
+    item: DiscoverItem,
     reason: String,
-    match_pct: Option<u8>,
 }
 
-/// Up to ten shows for a mood, chosen by the configured AI from the same
-/// candidates Discover shows.
+/// Up to ten shows (or, with `movies`, movies) for a mood, chosen by the
+/// configured AI from the same candidates Discover shows.
 #[tauri::command]
-pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<AiPickItem>, String> {
+pub async fn ai_picks(
+    state: State<'_, AppState>,
+    mood: String,
+    movies: Option<bool>,
+) -> Result<Vec<AiPickItem>, String> {
     let mood = mood.trim();
     if mood.is_empty() {
         return Err("Describe what you're in the mood for.".into());
@@ -899,48 +1058,46 @@ pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<Ai
         .await
         .filter(|c| !c.api_key.is_empty())
         .ok_or("Add an AI API key in Settings first.")?;
+    let media = media(movies);
     let client = state.signed_in_client().await?;
-    let found = gather(&state, &client, false).await?;
+    let found = gather(&state, &client, media, false).await?;
 
     // Unique candidates, best taste match first, capped to keep the request
     // (and the model's thinking) small.
-    let mut seen = HashSet::new();
-    let mut shows: Vec<&Show> = found
-        .rows
+    let mut suggestions = found.unique();
+    suggestions.truncate(50);
+    let candidates: Vec<ai::Candidate> = suggestions
         .iter()
-        .flat_map(|(_, s)| s)
-        .filter(|s| s.ids.trakt.is_some_and(|id| seen.insert(id)))
-        .collect();
-    if found.model.is_useful() {
-        shows.sort_by(|a, b| found.model.score(b).total_cmp(&found.model.score(a)));
-    }
-    shows.truncate(50);
-    let candidates: Vec<ai::Candidate> = shows
-        .iter()
-        .filter_map(|s| {
-            Some(ai::Candidate {
-                id: s.ids.trakt?,
-                title: s.display_title().to_owned(),
-                year: s.year,
-                genres: s.genres.clone().unwrap_or_default(),
-                overview: s.overview.clone(),
-            })
+        .map(|s| ai::Candidate {
+            id: s.id,
+            title: s.title.clone(),
+            year: s.year,
+            genres: s.genres.clone(),
+            overview: s.overview.clone(),
         })
         .collect();
 
     // Your history and favourite cast & crew go in the prompt, so this is a
     // single request to the AI.
     let items = state.items(false).await?;
-    let context = {
+    let mut context = {
         let labels = state.labels.lock().await;
         TasteContext::new(&items, &labels, Utc::now())
+    };
+    let kind = match media {
+        Media::Tv => ai::Kind::Shows,
+        Media::Movie => {
+            let (watched, _) = state.movie_data(&client, false).await?;
+            context = context.with_movies(&watched);
+            ai::Kind::Movies
+        }
     };
     // Cast and crew looked up for earlier asks are reused.
     let taste = {
         let mut people = state.people.lock().await;
         context.to_prompt_json(&client, &mut people).await
     };
-    let picks = ai::pick(&config, mood, &candidates, &taste)
+    let picks = ai::pick(&config, kind, mood, &candidates, &taste)
         .await
         .map_err(to_ui_error)?;
     if picks.is_empty() {
@@ -951,14 +1108,10 @@ pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<Ai
     Ok(picks
         .into_iter()
         .filter_map(|p| {
-            let show = shows.iter().find(|s| s.ids.trakt == Some(p.id))?;
+            let s = suggestions.iter().find(|s| s.id == p.id)?;
             Some(AiPickItem {
-                show_id: p.id,
-                title: show.display_title().to_owned(),
-                year: show.year,
-                poster: artwork.poster_url(show.ids.tmdb, Size::Thumb),
+                item: s.item(media, &artwork),
                 reason: p.reason,
-                match_pct: match_pct(&found.model, show),
             })
         })
         .collect())

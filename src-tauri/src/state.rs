@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use nextep_core::ai::AiConfig;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::{Labels, ShowStatus};
-use nextep_core::models::{Show, ShowPeople, TraktList, WatchedMovie, WatchlistMovie};
+use nextep_core::models::{Movie, Show, ShowPeople, TraktList, WatchedMovie, WatchlistMovie};
 use nextep_core::progress::ProgressItem;
 use nextep_core::sync::{self, ProgressCache};
 use nextep_core::tmdb::{ArtworkCache, Media, Size, TmdbClient};
@@ -36,14 +36,18 @@ const REUSE_SECS: i64 = 120;
 /// picks reuse them for this long unless Discover is refreshed.
 const FEEDS_REUSE_SECS: i64 = 30 * 60;
 
-/// Candidate shows from Trakt for Discover and AI picks. `None` and missing
-/// entries haven't been fetched (or failed) yet.
+/// Candidate shows and movies from Trakt for Discover and AI picks. `None`
+/// and missing entries haven't been fetched (or failed) yet.
 #[derive(Clone, Default)]
 pub struct Feeds {
     pub recommended: Option<Vec<Show>>,
     pub trending: Option<Vec<Show>>,
     /// Shows related to a watched show, by its Trakt id.
     pub related: HashMap<u64, Vec<Show>>,
+    pub recommended_movies: Option<Vec<Movie>>,
+    pub trending_movies: Option<Vec<Movie>>,
+    /// Movies related to a watched movie, by its Trakt id.
+    pub related_movies: HashMap<u64, Vec<Movie>>,
 }
 
 pub struct AppState {

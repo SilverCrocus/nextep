@@ -441,7 +441,11 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
                         }
                         .into_any(),
                         Tab::Calendar => view! { <Calendar/> }.into_any(),
-                        Tab::Discover => view! { <Discover/> }.into_any(),
+                        Tab::Discover => view! {
+                            <MediaSwitch/>
+                            <Discover/>
+                        }
+                        .into_any(),
                         Tab::Library => view! {
                             <MediaSwitch/>
                             {move || match nav.media.get() {

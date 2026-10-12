@@ -1,6 +1,7 @@
 //! Optional "AI picks": an OpenAI-compatible chat API (DeepSeek by default)
-//! chooses shows for a mood the user describes, given a summary of the user's
-//! history and the people behind shows they liked (see `ai_context`).
+//! chooses shows or movies for a mood the user describes, given a summary of
+//! the user's history and the people behind shows they liked (see
+//! `ai_context`).
 //!
 //! The model only ranks and explains real candidates that Nextep found on
 //! Trakt; any id it returns that isn't a candidate is dropped, so it can't
@@ -20,8 +21,8 @@ use crate::{Error, Result};
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 pub const DEFAULT_MODEL: &str = "deepseek-flash";
 /// How hard thinking models think: DeepSeek takes `none`, `low`, `high`, `max`.
-/// Low by default: every tool round thinks again, so higher effort multiplies
-/// the wait. Users can raise it in Settings.
+/// Low by default: it answers in seconds, where max can think for a minute or
+/// more. Users can raise it in Settings.
 pub const DEFAULT_REASONING_EFFORT: &str = "low";
 const MAX_PICKS: usize = 10;
 /// Characters of each candidate's overview sent to the model.
@@ -37,7 +38,23 @@ pub struct AiConfig {
     pub reasoning_effort: Option<String>,
 }
 
-/// A show the model may pick from.
+/// What the user wants picked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Shows,
+    Movies,
+}
+
+impl Kind {
+    fn noun(self) -> &'static str {
+        match self {
+            Kind::Shows => "TV shows",
+            Kind::Movies => "movies",
+        }
+    }
+}
+
+/// A show or movie the model may pick from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub id: u64,
@@ -77,11 +94,12 @@ pub async fn list_models(config: &AiConfig) -> Result<Vec<String>> {
 /// [`TasteContext`](crate::ai_context::TasteContext)).
 pub async fn pick(
     config: &AiConfig,
+    kind: Kind,
     mood: &str,
     candidates: &[Candidate],
     taste: &Value,
 ) -> Result<Vec<Pick>> {
-    let (system, user) = prompt(mood, candidates, taste);
+    let (system, user) = prompt(kind, mood, candidates, taste);
     // No max_tokens: thinking models count their reasoning towards it, and a
     // small cap leaves nothing for the answer. No JSON mode either: not every
     // provider allows it, so the prompt asks for JSON and the reply is parsed
@@ -111,13 +129,15 @@ pub async fn pick(
     ))
 }
 
-fn prompt(mood: &str, candidates: &[Candidate], taste: &Value) -> (String, String) {
+fn prompt(kind: Kind, mood: &str, candidates: &[Candidate], taste: &Value) -> (String, String) {
+    let noun = kind.noun();
     let system = format!(
-        "You recommend TV shows. You are given the user's taste as JSON: a taste profile \
-         aggregated over their whole history, the shows they watched most recently (with how far \
-         they got and whether they liked them), shows they dropped or didn't like, and people \
-         (actors, creators, directors, writers) who recur in shows they liked. Use it to \
-         understand their taste, then choose only from the numbered candidates you are given; \
+        "You recommend {noun}. You are given the user's taste as JSON: a taste profile \
+         aggregated over their TV history, the shows they watched most recently (with how far \
+         they got and whether they liked them), shows they dropped or didn't like, people \
+         (actors, creators, directors, writers) who recur in shows they liked, and, when \
+         present, the movies they watched most recently. Taste carries over between TV and \
+         film. Use it to understand their taste, then choose only from the numbered candidates you are given; \
          never suggest anything else. Pick up to {MAX_PICKS} that best fit the user's mood and \
          taste, best first. Reply with JSON only: {{\"picks\": [{{\"id\": <candidate id>, \"reason\": \"<one \
          short sentence, addressed to the user, that can mention what in their history it \
@@ -329,7 +349,9 @@ mod tests {
             reasoning_effort: Some("max".into()),
         };
         let taste = json!({ "taste_profile": { "shows_watched": 42 } });
-        let picks = pick(&config, "spies", &candidates(), &taste).await.unwrap();
+        let picks = pick(&config, Kind::Shows, "spies", &candidates(), &taste)
+            .await
+            .unwrap();
         assert_eq!(
             picks,
             [Pick {
@@ -375,7 +397,8 @@ mod tests {
     #[test]
     fn prompt_has_taste_and_candidates() {
         let taste = json!({ "recent_shows": [{ "title": "Slow Horses" }] });
-        let (system, user) = prompt("something cosy", &candidates(), &taste);
+        let (system, user) = prompt(Kind::Shows, "something cosy", &candidates(), &taste);
+        assert!(system.starts_with("You recommend TV shows."));
         assert!(system.contains("only from the numbered candidates"));
         assert!(user.contains("My mood: something cosy"));
         assert!(user.contains(r#"{"recent_shows":[{"title":"Slow Horses"}]}"#));
@@ -386,7 +409,7 @@ mod tests {
     fn prompt_shortens_overviews() {
         let mut long = candidates();
         long[0].overview = Some("x".repeat(500));
-        let (_, user) = prompt("anything", &long, &json!({}));
+        let (_, user) = prompt(Kind::Shows, "anything", &long, &json!({}));
         assert!(user.contains(&format!("| {}\n", "x".repeat(OVERVIEW_CHARS))));
         assert!(!user.contains(&"x".repeat(OVERVIEW_CHARS + 1)));
     }

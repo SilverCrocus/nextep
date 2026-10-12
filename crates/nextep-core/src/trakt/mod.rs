@@ -18,8 +18,8 @@ use serde_json::json;
 
 use crate::models::{
     CalendarEntry, CalendarMovie, HiddenShow, HistoryEntry, ListedShow, Movie, MovieSearchResult,
-    SearchResult, Season, Show, ShowPeople, ShowProgress, TraktList, TrendingShow, UserSettings,
-    UserStats, WatchedMovie, WatchedShow, WatchlistMovie, WatchlistShow,
+    SearchResult, Season, Show, ShowPeople, ShowProgress, TraktList, TrendingMovie, TrendingShow,
+    UserSettings, UserStats, WatchedMovie, WatchedShow, WatchlistMovie, WatchlistShow,
 };
 use crate::{Error, Result};
 
@@ -354,6 +354,23 @@ impl TraktClient {
 
     pub async fn trending_shows(&self, limit: u32) -> Result<Vec<TrendingShow>> {
         let path = format!("/shows/trending?limit={limit}&extended=full");
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn recommended_movies(&self, limit: u32) -> Result<Vec<Movie>> {
+        let path = format!(
+            "/recommendations/movies?limit={limit}&ignore_collected=true&ignore_watchlisted=false&extended=full"
+        );
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn related_movies(&self, movie_trakt_id: u64, limit: u32) -> Result<Vec<Movie>> {
+        let path = format!("/movies/{movie_trakt_id}/related?limit={limit}&extended=full");
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn trending_movies(&self, limit: u32) -> Result<Vec<TrendingMovie>> {
+        let path = format!("/movies/trending?limit={limit}&extended=full");
         send_json(self.authed(Method::GET, &path)?).await
     }
 

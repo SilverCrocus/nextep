@@ -1,6 +1,7 @@
 //! What AI picks tells the model about the user's taste: recent shows, an
-//! aggregate taste profile, dropped shows, and the people (cast, creators,
-//! directors, writers) who recur in shows they liked.
+//! aggregate taste profile, dropped shows, the people (cast, creators,
+//! directors, writers) who recur in shows they liked and, for movie picks,
+//! recently watched movies.
 //!
 //! It is all worked out before the request and sent in the prompt, so a pick
 //! is a single model call. History comes from data already on the device;
@@ -15,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::TraktClient;
 use crate::labels::{Labels, ShowStatus};
-use crate::models::{Show, ShowPeople};
+use crate::models::{Show, ShowPeople, WatchedMovie};
 use crate::progress::ProgressItem;
 use crate::taste;
 
@@ -25,6 +26,18 @@ const PEOPLE_SHOWS: usize = 12;
 const RECENT_SHOWS: usize = 15;
 /// Dropped and disliked shows sent in full.
 const DROPPED_SHOWS: usize = 20;
+/// Recently watched movies sent in full.
+const RECENT_MOVIES: usize = 15;
+
+#[derive(Debug, Clone, Serialize)]
+struct MovieFacts {
+    title: String,
+    year: Option<i32>,
+    genres: Vec<String>,
+    trakt_rating: Option<f64>,
+    times_watched: u32,
+    last_watched: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct ShowFacts {
@@ -49,6 +62,8 @@ pub struct TasteContext {
     shows: Vec<ShowFacts>,
     /// Shows hidden or dropped without being watched.
     unwatched_dropped: Vec<ShowFacts>,
+    /// Most recently watched movies first; empty unless added.
+    movies: Vec<MovieFacts>,
 }
 
 impl TasteContext {
@@ -97,9 +112,31 @@ impl TasteContext {
             })
             .collect();
         Self {
+            movies: Vec::new(),
             shows,
             unwatched_dropped,
         }
+    }
+
+    /// Adds the most recently watched movies, for movie picks.
+    pub fn with_movies(mut self, watched: &[WatchedMovie]) -> Self {
+        let mut watched: Vec<&WatchedMovie> = watched.iter().collect();
+        watched.sort_by_key(|w| std::cmp::Reverse(w.last_watched_at));
+        self.movies = watched
+            .into_iter()
+            .take(RECENT_MOVIES)
+            .map(|w| MovieFacts {
+                title: w.movie.display_title().to_owned(),
+                year: w.movie.year,
+                genres: w.movie.genres.clone().unwrap_or_default(),
+                trakt_rating: w.movie.rating.map(|r| (r * 10.0).round() / 10.0),
+                times_watched: w.plays,
+                last_watched: w
+                    .last_watched_at
+                    .map(|at| at.format("%Y-%m-%d").to_string()),
+            })
+            .collect();
+        self
     }
 
     /// Everything the model gets to know about the user, for the prompt.
@@ -110,12 +147,16 @@ impl TasteContext {
         client: &TraktClient,
         people: &mut HashMap<u64, ShowPeople>,
     ) -> Value {
-        json!({
+        let mut taste = json!({
             "taste_profile": self.taste_profile(),
             "recent_shows": self.recent_shows(),
             "dropped_shows": self.dropped_shows(),
             "favourite_people": self.favourite_people(client, people).await,
-        })
+        });
+        if !self.movies.is_empty() {
+            taste["recent_movies"] = json!(self.movies);
+        }
+        taste
     }
 
     fn recent_shows(&self) -> Value {
@@ -422,6 +463,28 @@ mod tests {
             all["favourite_people"]["people_in_several_liked_shows"],
             json!([])
         );
+    }
+
+    #[tokio::test]
+    async fn movies_are_added_newest_first_only_when_given() {
+        let client = TraktClient::new("id");
+        let without = context().to_prompt_json(&client, &mut HashMap::new()).await;
+        assert!(without.get("recent_movies").is_none());
+
+        let movie = |title: &str, days_ago: i64| WatchedMovie {
+            plays: 1,
+            last_watched_at: Some(now() - Duration::days(days_ago)),
+            movie: crate::models::Movie {
+                title: Some(title.into()),
+                ..serde_json::from_value(json!({ "ids": {} })).unwrap()
+            },
+        };
+        let with = context()
+            .with_movies(&[movie("Older", 30), movie("Newer", 2)])
+            .to_prompt_json(&client, &mut HashMap::new())
+            .await;
+        assert_eq!(with["recent_movies"][0]["title"], "Newer");
+        assert_eq!(with["recent_movies"][1]["title"], "Older");
     }
 
     #[tokio::test]

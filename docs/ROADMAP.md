@@ -41,13 +41,17 @@ what gets used daily stays, the rest is cut or deferred.
         request that carries your history (recent shows, taste profile,
         dropped shows) and the cast & crew of shows you liked.
         Bring-your-own key, stored only on the device
+  - [x] Shows | Movies switch: the same rows and AI picks for movies
+        (related to your last three movies, Trakt's movie picks, trending),
+        scored by the taste model on the genres, decade and rating movies
+        share with shows
 - [x] In-app updates: the update banner downloads the release and opens
       Android's installer (no browser or Obtainium needed)
 - [x] **Movies**: Shows | Movies switch on Progress (to watch / coming soon)
       and Library (watched / watchlist), movie pages (mark watched,
       watchlist, where to watch, director and cast), movies in Search, and
       watchlist releases in Calendar
-- [ ] Movies in Discover, AI picks and Lists
+- [ ] Movies in Lists
 - [ ] New-episode notifications
 - [ ] Home-screen widget
 

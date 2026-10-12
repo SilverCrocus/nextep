@@ -4,13 +4,16 @@
 //! finished or kept watching count as liked; dropped, on hold, or abandoned
 //! early count as not. A logistic regression over simple show features
 //! (genres, network, decade, rating, episode length) then scores new shows.
+//! Movies are scored by the same model on the features they share with
+//! shows (genres, decade, rating): Trakt has no "dropped" for a movie, so
+//! there is nothing to learn movie dislikes from.
 
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 
 use crate::labels::ShowStatus;
-use crate::models::Show;
+use crate::models::{Movie, Show};
 use crate::progress::ProgressItem;
 
 /// Below this many examples the model knows too little to be shown.
@@ -41,26 +44,9 @@ pub fn label(item: &ProgressItem, status: Option<ShowStatus>, now: DateTime<Utc>
 
 /// Sparse features of a show, e.g. `genre:drama`, `network:hbo`.
 pub fn features(show: &Show) -> Vec<String> {
-    let mut out: Vec<String> = show
-        .genres
-        .iter()
-        .flatten()
-        .map(|g| format!("genre:{}", g.to_lowercase()))
-        .collect();
+    let mut out = shared_features(show.genres.as_deref(), show.year, show.rating);
     if let Some(network) = &show.network {
         out.push(format!("network:{}", network.to_lowercase()));
-    }
-    if let Some(year) = show.year {
-        out.push(format!("decade:{}", year / 10 * 10));
-    }
-    if let Some(rating) = show.rating.filter(|r| *r > 0.0) {
-        let bucket = match rating {
-            r if r < 6.0 => "<6",
-            r if r < 7.0 => "6-7",
-            r if r < 8.0 => "7-8",
-            _ => "8+",
-        };
-        out.push(format!("rating:{bucket}"));
     }
     if let Some(runtime) = show.runtime.filter(|r| *r > 0) {
         let bucket = match runtime {
@@ -69,6 +55,36 @@ pub fn features(show: &Show) -> Vec<String> {
             _ => "long",
         };
         out.push(format!("runtime:{bucket}"));
+    }
+    out
+}
+
+/// Features a movie shares with shows: genres, decade and rating.
+pub fn movie_features(movie: &Movie) -> Vec<String> {
+    shared_features(movie.genres.as_deref(), movie.year, movie.rating)
+}
+
+fn shared_features(
+    genres: Option<&[String]>,
+    year: Option<i32>,
+    rating: Option<f64>,
+) -> Vec<String> {
+    let mut out: Vec<String> = genres
+        .into_iter()
+        .flatten()
+        .map(|g| format!("genre:{}", g.to_lowercase()))
+        .collect();
+    if let Some(year) = year {
+        out.push(format!("decade:{}", year / 10 * 10));
+    }
+    if let Some(rating) = rating.filter(|r| *r > 0.0) {
+        let bucket = match rating {
+            r if r < 6.0 => "<6",
+            r if r < 7.0 => "6-7",
+            r if r < 8.0 => "7-8",
+            _ => "8+",
+        };
+        out.push(format!("rating:{bucket}"));
     }
     out
 }
@@ -125,6 +141,10 @@ impl TasteModel {
 
     pub fn score(&self, show: &Show) -> f64 {
         self.predict(&features(show))
+    }
+
+    pub fn score_movie(&self, movie: &Movie) -> f64 {
+        self.predict(&movie_features(movie))
     }
 
     /// Enough history to trust the scores.

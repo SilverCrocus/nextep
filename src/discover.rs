@@ -3,11 +3,12 @@ use leptos::task::spawn_local;
 use serde::Serialize;
 
 use crate::api::{self, AiPick, DiscoverItem, DiscoverView};
-use crate::app::{Poster, Preview, nav};
+use crate::app::{Media, Poster, Preview, nav};
 use crate::settings::load_ai_settings;
 
-/// Shows you haven't watched, in shelves: picked by the on-device taste
-/// model, related to what you watched last, Trakt's picks, and trending.
+/// Shows (or movies) you haven't watched, in shelves: picked by the
+/// on-device taste model, related to what you watched last, Trakt's picks,
+/// and trending.
 #[component]
 pub fn Discover() -> impl IntoView {
     let nav = nav();
@@ -19,7 +20,12 @@ pub fn Discover() -> impl IntoView {
         struct Args {
             force: bool,
             cached: bool,
+            movies: bool,
         }
+        let media = nav.media.get_untracked();
+        let movies = media == Media::Movies;
+        // A slow answer for shows mustn't land after switching to movies.
+        let current = move || nav.media.get_untracked() == media;
         spawn_local(async move {
             if data.with_untracked(Option::is_none)
                 && let Ok(v) = api::call::<DiscoverView>(
@@ -27,21 +33,27 @@ pub fn Discover() -> impl IntoView {
                     Args {
                         force,
                         cached: true,
+                        movies,
                     },
                 )
                 .await
+                && current()
             {
                 data.set(Some(v));
             }
-            match api::call::<DiscoverView>(
+            let result = api::call::<DiscoverView>(
                 "discover",
                 Args {
                     force,
                     cached: false,
+                    movies,
                 },
             )
-            .await
-            {
+            .await;
+            if !current() {
+                return;
+            }
+            match result {
                 Ok(v) => data.set(Some(v)),
                 Err(e) => nav.report(e, error),
             }
@@ -57,12 +69,27 @@ pub fn Discover() -> impl IntoView {
             load(true);
         }
     });
+    Effect::new(move |previous: Option<Media>| {
+        let media = nav.media.get();
+        if previous.is_some_and(|p| p != media) {
+            data.set(None);
+            error.set(None);
+            load(false);
+        }
+        media
+    });
 
     view! {
         <AskAi/>
         {move || error.get().map(|e| view! { <p class="warn">{e}</p> })}
         {move || match data.get() {
-            None => view! { <p class="hint">"Finding shows for you…"</p> }.into_any(),
+            None => {
+                let what = match nav.media.get_untracked() {
+                    Media::Shows => "Finding shows for you…",
+                    Media::Movies => "Finding movies for you…",
+                };
+                view! { <p class="hint">{what}</p> }.into_any()
+            }
             Some(v) => view! {
                 {(v.learned_from > 0)
                     .then(|| {
@@ -95,10 +122,17 @@ pub fn Discover() -> impl IntoView {
 #[component]
 fn ShelfCard(item: DiscoverItem) -> impl IntoView {
     let nav = nav();
-    let show_id = item.show_id;
+    let (id, movie) = (item.id, item.movie);
     let preview = Preview::new(&item.title, &item.poster);
+    let open = move |_| {
+        if movie {
+            nav.open_movie(id, preview.clone())
+        } else {
+            nav.open_show(id, preview.clone())
+        }
+    };
     view! {
-        <button class="card shelf-card" on:click=move |_| nav.open_show(show_id, preview.clone())>
+        <button class="card shelf-card" on:click=open>
             <div class="poster-wrap">
                 <Poster src=item.poster/>
                 {item.match_pct.map(|pct| view! { <span class="match">{format!("{pct}%")}</span> })}
@@ -110,7 +144,7 @@ fn ShelfCard(item: DiscoverItem) -> impl IntoView {
 }
 
 /// "What are you in the mood for?" box: the configured AI picks from the
-/// Discover candidates and says why.
+/// Discover candidates (shows or movies, following the switch) and says why.
 #[component]
 fn AskAi() -> impl IntoView {
     let nav = nav();
@@ -121,6 +155,16 @@ fn AskAi() -> impl IntoView {
     let asking = RwSignal::new(false);
     // Seconds spent thinking; max thinking can take a minute or more.
     let elapsed = RwSignal::new(0u32);
+
+    // Picks for shows don't belong under Movies, and the other way round.
+    Effect::new(move |previous: Option<Media>| {
+        let media = nav.media.get();
+        if previous.is_some_and(|p| p != media) {
+            picks.set(None);
+            error.set(None);
+        }
+        media
+    });
 
     // Re-check when settings change (e.g. a key was just saved).
     Effect::new(move |_| {
@@ -134,8 +178,10 @@ fn AskAi() -> impl IntoView {
         #[derive(Serialize)]
         struct Args {
             mood: String,
+            movies: bool,
         }
         let text = mood.get_untracked();
+        let media = nav.media.get_untracked();
         if text.trim().is_empty() || asking.get_untracked() {
             return;
         }
@@ -149,11 +195,19 @@ fn AskAi() -> impl IntoView {
             }
         });
         spawn_local(async move {
-            match api::call::<Vec<AiPick>>("ai_picks", Args { mood: text }).await {
+            let args = Args {
+                mood: text,
+                movies: media == Media::Movies,
+            };
+            let result = api::call::<Vec<AiPick>>("ai_picks", args).await;
+            asking.set(false);
+            if nav.media.get_untracked() != media {
+                return;
+            }
+            match result {
                 Ok(list) => picks.set(Some(list)),
                 Err(e) => nav.report(e, error),
             }
-            asking.set(false);
         });
     };
 
@@ -164,7 +218,7 @@ fn AskAi() -> impl IntoView {
             <div class="ai-box">
                 <p class="show">"AI picks"</p>
                 <p class="hint small">
-                    "Describe a mood and an AI picks from these shows and says why. Add a DeepSeek (or other OpenAI-compatible) API key to turn it on."
+                    "Describe a mood and an AI picks from these suggestions and says why. Add a DeepSeek (or other OpenAI-compatible) API key to turn it on."
                 </p>
                 <button class="pill" on:click=move |_| nav.open_settings()>"Add a key in Settings"</button>
             </div>
@@ -212,7 +266,7 @@ fn AskAi() -> impl IntoView {
 #[component]
 fn AiPickRow(pick: AiPick) -> impl IntoView {
     let nav = nav();
-    let show_id = pick.show_id;
+    let (id, movie) = (pick.id, pick.movie);
     let meta = [
         pick.year.map(|y| y.to_string()),
         pick.match_pct.map(|m| format!("{m}% match")),
@@ -224,7 +278,16 @@ fn AiPickRow(pick: AiPick) -> impl IntoView {
     let preview = Preview::new(&pick.title, &pick.poster);
     view! {
         <li class="row">
-            <div class="tap" on:click=move |_| nav.open_show(show_id, preview.clone())>
+            <div
+                class="tap"
+                on:click=move |_| {
+                    if movie {
+                        nav.open_movie(id, preview.clone())
+                    } else {
+                        nav.open_show(id, preview.clone())
+                    }
+                }
+            >
                 <Poster src=pick.poster class="thumb"/>
                 <div class="info">
                     <p class="show">{pick.title}</p>

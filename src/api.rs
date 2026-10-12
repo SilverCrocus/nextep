@@ -252,7 +252,10 @@ pub struct HistoryItem {
 
 #[derive(Clone, Deserialize)]
 pub struct AiPick {
-    pub show_id: u64,
+    /// Show id, or movie id for movies.
+    pub id: u64,
+    #[serde(default)]
+    pub movie: bool,
     pub title: String,
     pub year: Option<i32>,
     pub poster: Option<String>,
@@ -262,7 +265,10 @@ pub struct AiPick {
 
 #[derive(Clone, Deserialize)]
 pub struct DiscoverItem {
-    pub show_id: u64,
+    /// Show id, or movie id for movies.
+    pub id: u64,
+    #[serde(default)]
+    pub movie: bool,
     pub title: String,
     pub year: Option<i32>,
     pub poster: Option<String>,
