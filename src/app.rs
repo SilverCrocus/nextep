@@ -147,19 +147,19 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
             let mut interval_ms = f64::from(dc.interval.max(1)) * 1000.0;
             let mut last_poll = started;
             let mut was_hidden = false;
-            let mut failures = 0;
             let outcome = loop {
                 TimeoutFuture::new(1000).await;
                 let now = js_sys::Date::now();
                 if now - started >= expires_ms {
                     break "The code expired. Try again.".to_string();
                 }
-                // Poll on schedule, or right away when the user comes back
-                // from approving in the browser.
+                // Android blocks network access for apps in the background, so
+                // only poll while visible: on schedule, or right away when the
+                // user comes back from approving in the browser.
                 let hidden = api::page_hidden();
                 let came_back = was_hidden && !hidden;
                 was_hidden = hidden;
-                if now - last_poll < interval_ms && !came_back {
+                if hidden || (now - last_poll < interval_ms && !came_back) {
                     continue;
                 }
                 last_poll = now;
@@ -168,18 +168,13 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
                 };
                 match api::call::<String>("sign_in_poll", args).await.as_deref() {
                     Ok("signed_in") => return on_signed_in.run(()),
-                    Ok("pending") => failures = 0,
+                    Ok("pending") => message.set(None),
                     Ok("slow_down") => interval_ms += 5000.0,
                     Ok("denied") => break "Sign-in was declined on Trakt.".into(),
                     Ok(_) => break "The code expired. Try again.".into(),
-                    // Usually a connection dropped while Android had the app
-                    // frozen in the background; the next poll will succeed.
-                    Err(e) => {
-                        failures += 1;
-                        if failures >= 5 {
-                            break e.clone();
-                        }
-                    }
+                    // No network for a moment (e.g. just back from the
+                    // background). Keep trying until the code expires.
+                    Err(_) => message.set(Some("Can't reach Trakt, retrying…".into())),
                 }
             };
             code.set(None);
@@ -262,6 +257,12 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         on_signed_out,
     };
     provide_context(nav);
+    // Coming back to the app (e.g. from Stremio) refreshes the current tab.
+    let _ = window_event_listener_untyped("visibilitychange", move |_| {
+        if !api::page_hidden() {
+            nav.data_changed();
+        }
+    });
     // Android's back gesture (and the on-screen back buttons) pop the history
     // entry pushed when an overlay opened.
     let _ = window_event_listener_untyped("popstate", move |_| {
