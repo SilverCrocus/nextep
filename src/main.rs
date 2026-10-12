@@ -4,6 +4,7 @@ mod calendar;
 mod discover;
 mod library;
 mod lists;
+mod movies;
 mod progress;
 mod pull;
 mod search;

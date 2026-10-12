@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use nextep_core::ai::AiConfig;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::{Labels, ShowStatus};
-use nextep_core::models::TraktList;
+use nextep_core::models::{TraktList, WatchedMovie, WatchlistMovie};
 use nextep_core::progress::ProgressItem;
 use nextep_core::sync::{self, ProgressCache};
-use nextep_core::tmdb::{ArtworkCache, Size, TmdbClient};
+use nextep_core::tmdb::{ArtworkCache, Media, Size, TmdbClient};
 use nextep_core::{Error, TraktClient};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -47,7 +47,11 @@ pub struct AppState {
     lists: Mutex<Option<(DateTime<Utc>, Vec<TraktList>)>>,
     list_members: Mutex<HashMap<u64, HashSet<u64>>>,
     ai: Mutex<Option<AiConfig>>,
+    /// Watched movies and the movie watchlist, from the latest fetch.
+    movies: Mutex<Option<(DateTime<Utc>, MovieData)>>,
 }
+
+type MovieData = (Vec<WatchedMovie>, Vec<WatchlistMovie>);
 
 impl AppState {
     pub fn load(dir: PathBuf, trakt_client_id: &str, tmdb_api_key: Option<&str>) -> Self {
@@ -64,6 +68,7 @@ impl AppState {
             lists: Mutex::new(None),
             list_members: Mutex::new(HashMap::new()),
             ai: Mutex::new(read(&dir, AI_FILE)),
+            movies: Mutex::new(None),
             dir,
         }
     }
@@ -125,6 +130,7 @@ impl AppState {
         *self.watchlist.lock().await = None;
         *self.lists.lock().await = None;
         self.list_members.lock().await.clear();
+        *self.movies.lock().await = None;
         for name in [TOKEN_FILE, PROGRESS_FILE, LABELS_FILE] {
             let _ = fs::remove_file(self.dir.join(name));
         }
@@ -305,6 +311,25 @@ impl AppState {
         }
     }
 
+    /// Watched movies and the movie watchlist (two calls), reusing a fetch
+    /// from the last couple of minutes unless `force` is set.
+    pub async fn movie_data(&self, client: &TraktClient, force: bool) -> Result<MovieData, String> {
+        if !force
+            && let Some((at, data)) = &*self.movies.lock().await
+            && Utc::now() - *at < Duration::seconds(REUSE_SECS)
+        {
+            return Ok(data.clone());
+        }
+        let data = futures::try_join!(client.watched_movies(), client.watchlist_movies())
+            .map_err(to_ui_error)?;
+        *self.movies.lock().await = Some((Utc::now(), data.clone()));
+        Ok(data)
+    }
+
+    pub async fn invalidate_movies(&self) {
+        *self.movies.lock().await = None;
+    }
+
     /// Forces the next [`Self::items`] call to ask Trakt again.
     pub async fn invalidate(&self) {
         *self.items.lock().await = None;
@@ -314,7 +339,16 @@ impl AppState {
     pub async fn fetch_artwork(&self, tmdb_ids: impl IntoIterator<Item = u64>) {
         let Some(tmdb) = &self.tmdb else { return };
         let mut artwork = self.artwork.lock().await;
-        if artwork.fill(tmdb, tmdb_ids, Utc::now()).await {
+        if artwork.fill(tmdb, Media::Tv, tmdb_ids, Utc::now()).await {
+            let _ = self.save(ARTWORK_FILE, &*artwork);
+        }
+    }
+
+    /// Looks up posters for movies that don't have one cached yet.
+    pub async fn fetch_movie_artwork(&self, tmdb_ids: impl IntoIterator<Item = u64>) {
+        let Some(tmdb) = &self.tmdb else { return };
+        let mut artwork = self.artwork.lock().await;
+        if artwork.fill(tmdb, Media::Movie, tmdb_ids, Utc::now()).await {
             let _ = self.save(ARTWORK_FILE, &*artwork);
         }
     }

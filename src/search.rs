@@ -66,7 +66,7 @@ pub fn SearchPage() -> impl IntoView {
                 <input
                     node_ref=input
                     type="search"
-                    placeholder="Search shows"
+                    placeholder="Search shows and movies"
                     enterkeyhint="search"
                     autocomplete="off"
                     prop:value=move || query.get()
@@ -103,20 +103,34 @@ pub fn SearchPage() -> impl IntoView {
 #[component]
 fn SearchRow(item: SearchItem) -> impl IntoView {
     let nav = nav();
-    let show_id = item.show_id;
+    let id = item.id;
+    let movie = item.kind == "movie";
     let on_watchlist = RwSignal::new(item.on_watchlist);
     let busy = RwSignal::new(false);
-    let meta = [item.year.map(|y| y.to_string()), item.network]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let meta = [
+        Some(if movie {
+            "Movie".to_string()
+        } else {
+            "Show".to_string()
+        }),
+        item.year.map(|y| y.to_string()),
+        item.note,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
 
     let toggle = move |_| {
         let on = !on_watchlist.get_untracked();
         busy.set(true);
         spawn_local(async move {
-            if api::set_watchlist(show_id, on).await.is_ok() {
+            let result = if movie {
+                api::set_movie_watchlist(id, on).await
+            } else {
+                api::set_watchlist(id, on).await
+            };
+            if result.is_ok() {
                 on_watchlist.set(on);
                 nav.data_changed();
             }
@@ -126,12 +140,15 @@ fn SearchRow(item: SearchItem) -> impl IntoView {
 
     view! {
         <li class="row">
-            <div class="tap" on:click=move |_| nav.open_show(show_id)>
+            <div
+                class="tap"
+                on:click=move |_| if movie { nav.open_movie(id) } else { nav.open_show(id) }
+            >
                 <Poster src=item.poster class="thumb"/>
                 <div class="info">
                     <p class="show">{item.title}</p>
                     <p class="meta">{meta}</p>
-                    {item.watched.then(|| view! { <p class="meta accent">"In your library"</p> })}
+                    {item.watched.then(|| view! { <p class="meta accent">{if movie { "Watched" } else { "In your library" }}</p> })}
                 </div>
             </div>
             {(!item.watched)

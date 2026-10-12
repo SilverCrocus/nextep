@@ -17,8 +17,9 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::models::{
-    CalendarEntry, HiddenShow, HistoryEntry, ListedShow, SearchResult, Season, Show, ShowPeople,
-    ShowProgress, TraktList, TrendingShow, UserSettings, UserStats, WatchedShow, WatchlistShow,
+    CalendarEntry, CalendarMovie, HiddenShow, HistoryEntry, ListedShow, Movie, MovieSearchResult,
+    SearchResult, Season, Show, ShowPeople, ShowProgress, TraktList, TrendingShow, UserSettings,
+    UserStats, WatchedMovie, WatchedShow, WatchlistMovie, WatchlistShow,
 };
 use crate::{Error, Result};
 
@@ -223,6 +224,67 @@ impl TraktClient {
         self.post(&path, shows_body(show_trakt_id)).await
     }
 
+    // ---- movies -----------------------------------------------------------
+
+    pub async fn watched_movies(&self) -> Result<Vec<WatchedMovie>> {
+        send_json(self.authed(Method::GET, "/sync/watched/movies?extended=full")?).await
+    }
+
+    pub async fn watchlist_movies(&self) -> Result<Vec<WatchlistMovie>> {
+        send_json(self.authed(Method::GET, "/sync/watchlist/movies?extended=full")?).await
+    }
+
+    pub async fn movie(&self, movie_trakt_id: u64) -> Result<Movie> {
+        send_json(self.authed(
+            Method::GET,
+            &format!("/movies/{movie_trakt_id}?extended=full"),
+        )?)
+        .await
+    }
+
+    /// Releases of movies the user follows (watchlist), starting at `start`.
+    pub async fn movie_calendar(&self, start: NaiveDate, days: u32) -> Result<Vec<CalendarMovie>> {
+        let path = format!(
+            "/calendars/my/movies/{}/{days}?extended=full",
+            start.format("%Y-%m-%d")
+        );
+        send_json(self.authed(Method::GET, &path)?).await
+    }
+
+    pub async fn search_movies(&self, query: &str) -> Result<Vec<MovieSearchResult>> {
+        let req = self.authed(Method::GET, "/search/movie")?.query(&[
+            ("query", query),
+            ("extended", "full"),
+            ("limit", "20"),
+        ]);
+        send_json(req).await
+    }
+
+    pub async fn mark_movie_watched(
+        &self,
+        movie_trakt_id: u64,
+        watched_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let body = json!({
+            "movies": [{ "ids": { "trakt": movie_trakt_id }, "watched_at": watched_at.to_rfc3339() }]
+        });
+        self.post("/sync/history", body).await
+    }
+
+    pub async fn add_movie_to_watchlist(&self, movie_trakt_id: u64) -> Result<()> {
+        self.post("/sync/watchlist", movies_body(movie_trakt_id))
+            .await
+    }
+
+    pub async fn remove_movie_from_watchlist(&self, movie_trakt_id: u64) -> Result<()> {
+        self.post("/sync/watchlist/remove", movies_body(movie_trakt_id))
+            .await
+    }
+
+    pub async fn movie_people(&self, movie_trakt_id: u64) -> Result<ShowPeople> {
+        send_json(self.authed(Method::GET, &format!("/movies/{movie_trakt_id}/people"))?).await
+    }
+
     // ---- lists ------------------------------------------------------------
 
     pub async fn my_lists(&self) -> Result<Vec<TraktList>> {
@@ -372,6 +434,10 @@ async fn check(res: reqwest::Response) -> Result<reqwest::Response> {
 
 async fn send_json<T: DeserializeOwned>(req: RequestBuilder) -> Result<T> {
     Ok(check(req.send().await?).await?.json().await?)
+}
+
+fn movies_body(movie_trakt_id: u64) -> serde_json::Value {
+    json!({ "movies": [{ "ids": { "trakt": movie_trakt_id } }] })
 }
 
 fn shows_body(show_trakt_id: u64) -> serde_json::Value {

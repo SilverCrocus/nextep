@@ -107,13 +107,6 @@ pub fn Library() -> impl IntoView {
         }
     });
 
-    let sign_out = move |_| {
-        spawn_local(async move {
-            let _ = api::call::<()>("sign_out", ()).await;
-            nav.sign_out();
-        })
-    };
-
     view! {
         {move || error.get().map(|e| view! { <p class="warn">{e}</p> })}
         {move || match data.get() {
@@ -153,12 +146,7 @@ pub fn Library() -> impl IntoView {
                 .into_any()
             }
         }}
-        <StatsStrip/>
-        <div class="footer">
-            <button class="ghost" on:click=move |_| nav.open_settings()>"Settings"</button>
-            <button class="ghost" on:click=sign_out>"Sign out of Trakt"</button>
-            <p class="version">{move || format!("Nextep v{}", nav.version.get())}</p>
-        </div>
+        <LibraryFooter/>
     }
 }
 
@@ -248,4 +236,25 @@ fn capitalize(s: &str) -> String {
         .next()
         .map(|first| first.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
+}
+
+/// Stats, Settings and sign-out at the bottom of Library (shows and movies).
+#[component]
+pub fn LibraryFooter() -> impl IntoView {
+    let nav = nav();
+    let sign_out = move |_| {
+        spawn_local(async move {
+            let _ = api::call::<()>("sign_out", ()).await;
+            nav.sign_out();
+        })
+    };
+
+    view! {
+        <StatsStrip/>
+        <div class="footer">
+            <button class="ghost" on:click=move |_| nav.open_settings()>"Settings"</button>
+            <button class="ghost" on:click=sign_out>"Sign out of Trakt"</button>
+            <p class="version">{move || format!("Nextep v{}", nav.version.get())}</p>
+        </div>
+    }
 }

@@ -43,8 +43,11 @@ what gets used daily stays, the rest is cut or deferred.
         Bring-your-own key, stored only on the device
 - [x] In-app updates: the update banner downloads the release and opens
       Android's installer (no browser or Obtainium needed)
-- [ ] **Movies**: watchlist, watched, progress-style "to watch", search,
-      movie pages, Calendar releases
+- [x] **Movies**: Shows | Movies switch on Progress (to watch / coming soon)
+      and Library (watched / watchlist), movie pages (mark watched,
+      watchlist, where to watch, director and cast), movies in Search, and
+      watchlist releases in Calendar
+- [ ] Movies in Discover, AI picks and Lists
 - [ ] New-episode notifications
 - [ ] Home-screen widget
 

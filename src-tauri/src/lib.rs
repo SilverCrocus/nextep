@@ -1,5 +1,6 @@
 mod commands;
 mod installer;
+mod movies;
 mod state;
 
 use std::fs;
@@ -34,6 +35,10 @@ pub fn run() {
             commands::open_link,
             commands::check_update,
             installer::install_update,
+            movies::movies,
+            movies::movie_details,
+            movies::mark_movie_watched,
+            movies::set_movie_watchlist,
             commands::progress,
             commands::mark_watched,
             commands::set_show_status,

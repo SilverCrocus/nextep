@@ -6,8 +6,9 @@ use serde::Serialize;
 use crate::api::{self, DeviceCode, NOT_SIGNED_IN, Status};
 use crate::calendar::Calendar;
 use crate::discover::Discover;
-use crate::library::Library;
+use crate::library::{Library, LibraryFooter};
 use crate::lists::ListPage;
+use crate::movies::{MovieLibrary, MoviePage, MovieProgress};
 use crate::progress::Progress;
 use crate::pull::PullToRefresh;
 use crate::search::SearchPage;
@@ -21,6 +22,14 @@ enum Overlay {
     Show(u64),
     List(u64),
     Settings,
+    Movie(u64),
+}
+
+/// Whether Progress and Library show TV shows or movies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Media {
+    Shows,
+    Movies,
 }
 
 /// App-wide navigation and shared state, provided as context.
@@ -32,6 +41,7 @@ pub struct Nav {
     /// Bumped by pull-to-refresh: lists reload from Trakt, skipping caches.
     pub refresh: RwSignal<u32>,
     pub sort: RwSignal<String>,
+    pub media: RwSignal<Media>,
     pub version: RwSignal<String>,
     on_signed_out: Callback<()>,
 }
@@ -51,6 +61,10 @@ impl Nav {
 
     pub fn open_settings(&self) {
         self.push(Overlay::Settings);
+    }
+
+    pub fn open_movie(&self, movie_id: u64) {
+        self.push(Overlay::Movie(movie_id));
     }
 
     /// Each overlay gets a history entry so Android's back gesture closes it.
@@ -277,6 +291,10 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         changed: RwSignal::new(0),
         refresh: RwSignal::new(0),
         sort: RwSignal::new(sort),
+        media: RwSignal::new(match api::load_pref("media").as_deref() {
+            Some("movies") => Media::Movies,
+            _ => Media::Shows,
+        }),
         version,
         on_signed_out,
     };
@@ -359,6 +377,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         Overlay::Show(show_id) => view! { <ShowPage show_id/> }.into_any(),
         Overlay::List(list_id) => view! { <ListPage list_id/> }.into_any(),
         Overlay::Settings => view! { <SettingsPage/> }.into_any(),
+        Overlay::Movie(movie_id) => view! { <MoviePage movie_id/> }.into_any(),
     };
 
     view! {
@@ -373,10 +392,28 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
             <section class="content">
                 <PullToRefresh on_refresh=Callback::new(move |_| nav.refresh())>
                     {move || match tab.get() {
-                        Tab::Progress => view! { <Progress/> }.into_any(),
+                        Tab::Progress => view! {
+                            <MediaSwitch/>
+                            {move || match nav.media.get() {
+                                Media::Shows => view! { <Progress/> }.into_any(),
+                                Media::Movies => view! { <MovieProgress/> }.into_any(),
+                            }}
+                        }
+                        .into_any(),
                         Tab::Calendar => view! { <Calendar/> }.into_any(),
                         Tab::Discover => view! { <Discover/> }.into_any(),
-                        Tab::Library => view! { <Library/> }.into_any(),
+                        Tab::Library => view! {
+                            <MediaSwitch/>
+                            {move || match nav.media.get() {
+                                Media::Shows => view! { <Library/> }.into_any(),
+                                Media::Movies => view! {
+                                    <MovieLibrary/>
+                                    <LibraryFooter/>
+                                }
+                                .into_any(),
+                            }}
+                        }
+                        .into_any(),
                     }}
                 </PullToRefresh>
             </section>
@@ -422,5 +459,31 @@ pub fn Poster(src: Option<String>, #[prop(optional)] class: &'static str) -> imp
     match src {
         Some(src) => view! { <img class=class src=src loading="lazy" alt=""/> }.into_any(),
         None => view! { <div class=format!("{class} blank")></div> }.into_any(),
+    }
+}
+
+/// "Shows | Movies" switch at the top of Progress and Library.
+#[component]
+pub fn MediaSwitch() -> impl IntoView {
+    let nav = nav();
+    let pick = move |media: Media| {
+        api::save_pref(
+            "media",
+            match media {
+                Media::Shows => "shows",
+                Media::Movies => "movies",
+            },
+        );
+        nav.media.set(media);
+    };
+    view! {
+        <div class="segmented media-switch">
+            <button class:active=move || nav.media.get() == Media::Shows on:click=move |_| pick(Media::Shows)>
+                "Shows"
+            </button>
+            <button class:active=move || nav.media.get() == Media::Movies on:click=move |_| pick(Media::Movies)>
+                "Movies"
+            </button>
+        </div>
     }
 }

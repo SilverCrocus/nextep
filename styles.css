@@ -931,3 +931,14 @@ select {
 .footer .ghost + .ghost {
   margin-top: -4px;
 }
+
+/* ---- movies ---- */
+
+.media-switch {
+  margin: 0 0 12px;
+}
+
+.credits {
+  margin-top: 12px !important;
+  white-space: normal;
+}

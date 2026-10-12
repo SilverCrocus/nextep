@@ -13,7 +13,7 @@ use nextep_core::progress::{
     self, ProgressItem, ProgressOptions, ProgressView, SortBy, title_sort_key,
 };
 use nextep_core::taste::{self, TasteModel};
-use nextep_core::tmdb::{Provider, Size};
+use nextep_core::tmdb::{Media, Provider, Size};
 use nextep_core::trakt::{DeviceCode, DevicePoll};
 use nextep_core::update::{self, Release};
 use nextep_core::{Error, TraktClient};
@@ -188,15 +188,19 @@ pub async fn set_show_status(
 
 #[derive(Serialize)]
 pub struct SearchItem {
-    show_id: u64,
+    /// "show" or "movie".
+    kind: &'static str,
+    id: u64,
     title: String,
     year: Option<i32>,
-    network: Option<String>,
+    /// Network for shows, runtime for movies.
+    note: Option<String>,
     poster: Option<String>,
     watched: bool,
     on_watchlist: bool,
 }
 
+/// Shows and movies matching `query`, most relevant first.
 #[tauri::command]
 pub async fn search(state: State<'_, AppState>, query: String) -> Result<Vec<SearchItem>, String> {
     let query = query.trim();
@@ -204,29 +208,72 @@ pub async fn search(state: State<'_, AppState>, query: String) -> Result<Vec<Sea
         return Ok(Vec::new());
     }
     let client = state.signed_in_client().await?;
-    let results = client.search_shows(query).await.map_err(to_ui_error)?;
-    let watchlist = state.watchlist_ids(&client).await?;
+    let (shows, movies) = futures::join!(client.search_shows(query), client.search_movies(query));
+    if let (Err(e), Err(_)) = (&shows, &movies) {
+        return Err(e.to_string());
+    }
+    let (shows, movies) = (shows.unwrap_or_default(), movies.unwrap_or_default());
+    let watchlist = state.watchlist_ids(&client).await.unwrap_or_default();
     let watched = state.watched_ids().await;
+    let (watched_movies, movie_watchlist) =
+        state.movie_data(&client, false).await.unwrap_or_default();
+    let watched_movies: HashSet<u64> = watched_movies
+        .iter()
+        .filter_map(|w| w.movie.ids.trakt)
+        .collect();
+    let movie_watchlist: HashSet<u64> = movie_watchlist
+        .iter()
+        .filter_map(|w| w.movie.ids.trakt)
+        .collect();
     state
-        .fetch_artwork(results.iter().filter_map(|r| r.show.ids.tmdb))
+        .fetch_artwork(shows.iter().filter_map(|r| r.show.ids.tmdb))
+        .await;
+    state
+        .fetch_movie_artwork(movies.iter().filter_map(|r| r.movie.ids.tmdb))
         .await;
 
     let artwork = state.artwork.lock().await;
-    Ok(results
+    let mut results: Vec<(f64, SearchItem)> = shows
         .into_iter()
         .filter_map(|r| {
-            let show_id = r.show.ids.trakt?;
-            Some(SearchItem {
-                show_id,
-                title: r.show.display_title().to_owned(),
-                year: r.show.year,
-                network: r.show.network.clone(),
-                poster: artwork.poster_url(r.show.ids.tmdb, Size::Thumb),
-                watched: watched.contains(&show_id),
-                on_watchlist: watchlist.contains(&show_id),
-            })
+            let id = r.show.ids.trakt?;
+            Some((
+                r.score.unwrap_or_default(),
+                SearchItem {
+                    kind: "show",
+                    id,
+                    title: r.show.display_title().to_owned(),
+                    year: r.show.year,
+                    note: r.show.network.clone(),
+                    poster: artwork.poster_url(r.show.ids.tmdb, Size::Thumb),
+                    watched: watched.contains(&id),
+                    on_watchlist: watchlist.contains(&id),
+                },
+            ))
         })
-        .collect())
+        .collect();
+    results.extend(movies.into_iter().filter_map(|r| {
+        let id = r.movie.ids.trakt?;
+        Some((
+            r.score.unwrap_or_default(),
+            SearchItem {
+                kind: "movie",
+                id,
+                title: r.movie.display_title().to_owned(),
+                year: r.movie.year,
+                note: r
+                    .movie
+                    .runtime
+                    .filter(|m| *m > 0)
+                    .map(|m| format!("{m} min")),
+                poster: artwork.poster(Media::Movie, r.movie.ids.tmdb, Size::Thumb),
+                watched: watched_movies.contains(&id),
+                on_watchlist: movie_watchlist.contains(&id),
+            },
+        ))
+    }));
+    results.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Ok(results.into_iter().map(|(_, item)| item).collect())
 }
 
 #[tauri::command]
@@ -251,14 +298,18 @@ pub async fn set_watchlist(
 #[derive(Serialize, Deserialize)]
 pub struct CalendarItem {
     first_aired: DateTime<Utc>,
-    show_id: Option<u64>,
-    show_title: String,
-    episode: Episode,
+    /// "episode" or "movie".
+    kind: String,
+    /// Show id for episodes, movie id for movies.
+    id: Option<u64>,
+    title: String,
+    episode: Option<Episode>,
     poster: Option<String>,
 }
 
-/// Episodes airing in the next month for followed shows, minus shows that are
-/// on hold or dropped. Starts a day early so the UI can cut at local midnight.
+/// Episodes airing in the next month for followed shows (minus shows on hold
+/// or dropped) and releases of unwatched movies on the watchlist. Starts a
+/// day early so the UI can cut at local midnight.
 #[tauri::command]
 pub async fn calendar(
     state: State<'_, AppState>,
@@ -269,29 +320,64 @@ pub async fn calendar(
     }
     let client = state.signed_in_client().await?;
     let start = (Utc::now() - Duration::days(1)).date_naive();
-    let entries = client.calendar(start, 32).await.map_err(to_ui_error)?;
+    let (episodes, movies) =
+        futures::join!(client.calendar(start, 32), client.movie_calendar(start, 32));
+    let episodes = episodes.map_err(to_ui_error)?;
+    let watched_movies: HashSet<u64> = state
+        .movie_data(&client, false)
+        .await
+        .map(|(watched, _)| watched.iter().filter_map(|w| w.movie.ids.trakt).collect())
+        .unwrap_or_default();
+    let movies: Vec<_> = movies
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            m.movie
+                .ids
+                .trakt
+                .is_some_and(|id| !watched_movies.contains(&id))
+        })
+        .collect();
 
     let labels = state.labels.lock().await;
-    let entries: Vec<_> = entries
+    let episodes: Vec<_> = episodes
         .into_iter()
         .filter(|e| !labels.is_hidden(e.show.ids.trakt))
         .collect();
     drop(labels);
 
     state
-        .fetch_artwork(entries.iter().filter_map(|e| e.show.ids.tmdb))
+        .fetch_artwork(episodes.iter().filter_map(|e| e.show.ids.tmdb))
+        .await;
+    state
+        .fetch_movie_artwork(movies.iter().filter_map(|m| m.movie.ids.tmdb))
         .await;
     let artwork = state.artwork.lock().await;
-    let items: Vec<CalendarItem> = entries
+    let mut items: Vec<CalendarItem> = episodes
         .into_iter()
         .map(|e| CalendarItem {
             first_aired: e.first_aired,
-            show_id: e.show.ids.trakt,
-            show_title: e.show.display_title().to_owned(),
+            kind: "episode".into(),
+            id: e.show.ids.trakt,
+            title: e.show.display_title().to_owned(),
             poster: artwork.poster_url(e.show.ids.tmdb, Size::Thumb),
-            episode: e.episode,
+            episode: Some(e.episode),
         })
         .collect();
+    items.extend(movies.into_iter().filter_map(|m| {
+        // Release dates have no time; noon UTC lands on the same local day
+        // almost everywhere.
+        let day = m.movie.released_on().or_else(|| m.released.parse().ok())?;
+        Some(CalendarItem {
+            first_aired: day.and_hms_opt(12, 0, 0)?.and_utc(),
+            kind: "movie".into(),
+            id: m.movie.ids.trakt,
+            title: m.movie.display_title().to_owned(),
+            poster: artwork.poster(Media::Movie, m.movie.ids.tmdb, Size::Thumb),
+            episode: None,
+        })
+    }));
+    items.sort_by_key(|i| i.first_aired);
     state.save_snapshot("calendar", &items);
     Ok(items)
 }
@@ -1109,9 +1195,10 @@ pub async fn show_details(
 
     // Best effort: a failed lookup just means no "where to watch" row.
     let streaming = match (state.tmdb(), show.ids.tmdb, region.as_deref()) {
-        (Some(tmdb), Some(tmdb_id), Some(region)) => {
-            tmdb.tv_streaming(tmdb_id, region).await.unwrap_or_default()
-        }
+        (Some(tmdb), Some(tmdb_id), Some(region)) => tmdb
+            .streaming(Media::Tv, tmdb_id, region)
+            .await
+            .unwrap_or_default(),
         _ => Vec::new(),
     };
 

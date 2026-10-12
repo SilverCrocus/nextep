@@ -67,14 +67,20 @@ impl TmdbClient {
         }
     }
 
-    pub async fn tv_artwork(&self, tmdb_id: u64) -> Result<Artwork> {
-        self.get(&format!("/tv/{tmdb_id}")).await
+    pub async fn artwork(&self, media: Media, tmdb_id: u64) -> Result<Artwork> {
+        self.get(&format!("/{}/{tmdb_id}", media.path())).await
     }
 
-    /// Services that include the show in a subscription or for free in
+    /// Services that include the title in a subscription or for free in
     /// `region` (ISO 3166-1, e.g. "AU"). Buy and rent offers are left out.
-    pub async fn tv_streaming(&self, tmdb_id: u64, region: &str) -> Result<Vec<Provider>> {
-        let res: ProvidersResponse = self.get(&format!("/tv/{tmdb_id}/watch/providers")).await?;
+    pub async fn streaming(
+        &self,
+        media: Media,
+        tmdb_id: u64,
+        region: &str,
+    ) -> Result<Vec<Provider>> {
+        let path = format!("/{}/{tmdb_id}/watch/providers", media.path());
+        let res: ProvidersResponse = self.get(&path).await?;
         let Some(region) = res.results.get(&region.to_uppercase()) else {
             return Ok(Vec::new());
         };
@@ -116,9 +122,27 @@ impl TmdbClient {
     }
 }
 
+/// TMDB keeps shows and movies apart; their ids overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Media {
+    Tv,
+    Movie,
+}
+
+impl Media {
+    fn path(self) -> &'static str {
+        match self {
+            Media::Tv => "tv",
+            Media::Movie => "movie",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ArtworkCache {
     tv: HashMap<u64, CachedArtwork>,
+    #[serde(default)]
+    movie: HashMap<u64, CachedArtwork>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,30 +170,42 @@ impl Size {
 }
 
 impl ArtworkCache {
-    /// Looks up shows that are missing or stale. Failures are skipped; the
-    /// show simply has no poster until the next try. Returns whether anything
-    /// was fetched, so the caller knows to save.
+    fn map(&self, media: Media) -> &HashMap<u64, CachedArtwork> {
+        match media {
+            Media::Tv => &self.tv,
+            Media::Movie => &self.movie,
+        }
+    }
+
+    /// Looks up titles that are missing or stale. Failures are skipped; the
+    /// title simply has no poster until the next try. Returns whether
+    /// anything was fetched, so the caller knows to save.
     pub async fn fill(
         &mut self,
         client: &TmdbClient,
+        media: Media,
         tmdb_ids: impl IntoIterator<Item = u64>,
         now: DateTime<Utc>,
     ) -> bool {
         let wanted: HashSet<u64> = tmdb_ids
             .into_iter()
             .filter(|id| {
-                self.tv
+                self.map(media)
                     .get(id)
                     .is_none_or(|c| now - c.fetched_at > Duration::days(MAX_AGE_DAYS))
             })
             .collect();
         let mut fetched = stream::iter(wanted)
-            .map(|id| async move { (id, client.tv_artwork(id).await) })
+            .map(|id| async move { (id, client.artwork(media, id).await) })
             .buffer_unordered(CONCURRENCY);
         let mut changed = false;
         while let Some((id, result)) = fetched.next().await {
             if let Ok(artwork) = result {
-                self.tv.insert(
+                let map = match media {
+                    Media::Tv => &mut self.tv,
+                    Media::Movie => &mut self.movie,
+                };
+                map.insert(
                     id,
                     CachedArtwork {
                         artwork,
@@ -182,13 +218,33 @@ impl ArtworkCache {
         changed
     }
 
+    /// Show poster.
     pub fn poster_url(&self, tmdb_id: Option<u64>, size: Size) -> Option<String> {
-        let path = self.tv.get(&tmdb_id?)?.artwork.poster_path.as_deref()?;
+        self.poster(Media::Tv, tmdb_id, size)
+    }
+
+    /// Show backdrop.
+    pub fn backdrop_url(&self, tmdb_id: Option<u64>) -> Option<String> {
+        self.backdrop(Media::Tv, tmdb_id)
+    }
+
+    pub fn poster(&self, media: Media, tmdb_id: Option<u64>, size: Size) -> Option<String> {
+        let path = self
+            .map(media)
+            .get(&tmdb_id?)?
+            .artwork
+            .poster_path
+            .as_deref()?;
         Some(format!("{IMAGE_URL}/{}{path}", size.path()))
     }
 
-    pub fn backdrop_url(&self, tmdb_id: Option<u64>) -> Option<String> {
-        let path = self.tv.get(&tmdb_id?)?.artwork.backdrop_path.as_deref()?;
+    pub fn backdrop(&self, media: Media, tmdb_id: Option<u64>) -> Option<String> {
+        let path = self
+            .map(media)
+            .get(&tmdb_id?)?
+            .artwork
+            .backdrop_path
+            .as_deref()?;
         Some(format!("{IMAGE_URL}/{}{path}", Size::Backdrop.path()))
     }
 }

@@ -52,6 +52,25 @@ pub async fn set_show_status(show_id: u64, status: Option<ShowStatus>) -> Result
     call("set_show_status", Args { show_id, status }).await
 }
 
+pub async fn mark_movie_watched(movie_id: u64) -> Result<(), String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        movie_id: u64,
+    }
+    call("mark_movie_watched", Args { movie_id }).await
+}
+
+pub async fn set_movie_watchlist(movie_id: u64, on: bool) -> Result<(), String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        movie_id: u64,
+        on: bool,
+    }
+    call("set_movie_watchlist", Args { movie_id, on }).await
+}
+
 pub async fn set_watchlist(show_id: u64, on: bool) -> Result<(), String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -171,10 +190,55 @@ pub struct ProgressView {
 #[derive(Clone, Deserialize)]
 pub struct CalendarItem {
     pub first_aired: String,
-    pub show_id: Option<u64>,
-    pub show_title: String,
-    pub episode: Episode,
+    /// "episode" or "movie".
+    pub kind: String,
+    pub id: Option<u64>,
+    pub title: String,
+    pub episode: Option<Episode>,
     pub poster: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct MovieCard {
+    pub movie_id: u64,
+    pub title: String,
+    pub poster: Option<String>,
+    pub note: String,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct MoviesView {
+    pub to_watch: Vec<MovieCard>,
+    pub coming_soon: Vec<MovieCard>,
+    pub watched: Vec<MovieCard>,
+    pub watchlist: Vec<MovieCard>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct Movie {
+    pub title: Option<String>,
+    pub year: Option<i32>,
+    pub tagline: Option<String>,
+    pub overview: Option<String>,
+    pub released: Option<String>,
+    pub runtime: Option<u32>,
+    pub rating: Option<f64>,
+    pub genres: Option<Vec<String>>,
+    pub certification: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct MovieDetails {
+    pub movie: Movie,
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
+    pub plays: u32,
+    pub last_watched_at: Option<String>,
+    pub on_watchlist: bool,
+    pub released: bool,
+    pub streaming: Vec<Provider>,
+    pub directors: Vec<String>,
+    pub cast: Vec<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -278,10 +342,12 @@ pub struct LibraryView {
 
 #[derive(Clone, Deserialize)]
 pub struct SearchItem {
-    pub show_id: u64,
+    /// "show" or "movie".
+    pub kind: String,
+    pub id: u64,
     pub title: String,
     pub year: Option<i32>,
-    pub network: Option<String>,
+    pub note: Option<String>,
     pub poster: Option<String>,
     pub watched: bool,
     pub on_watchlist: bool,

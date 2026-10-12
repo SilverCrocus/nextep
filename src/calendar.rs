@@ -52,8 +52,9 @@ fn Upcoming() -> impl IntoView {
             days
             empty="Nothing airing in the next month."
             row=|item: CalendarItem| {
-                let time = api::short_time(&item.first_aired);
-                view! { <EpisodeRow show_id=item.show_id title=item.show_title episode=item.episode poster=item.poster meta=time/> }
+                let movie = item.kind == "movie";
+                let meta = if movie { "Release".to_string() } else { api::short_time(&item.first_aired) };
+                view! { <EpisodeRow id=item.id title=item.title episode=item.episode movie poster=item.poster meta/> }
             }
         />
     }
@@ -71,7 +72,7 @@ fn History() -> impl IntoView {
             empty="Nothing watched yet."
             row=|item: HistoryItem| {
                 let time = format!("Watched {}", api::short_time(&item.watched_at));
-                view! { <EpisodeRow show_id=item.show_id title=item.show_title episode=item.episode poster=item.poster meta=time/> }
+                view! { <EpisodeRow id=item.show_id title=item.show_title episode=Some(item.episode) movie=false poster=item.poster meta=time/> }
             }
         />
     }
@@ -145,33 +146,40 @@ where
 }
 
 #[component]
+/// An episode (or, for `movie`, a movie release) in Calendar or History.
 fn EpisodeRow(
-    show_id: Option<u64>,
+    /// Show id, or movie id for movies.
+    id: Option<u64>,
     title: String,
-    episode: Episode,
+    episode: Option<Episode>,
+    movie: bool,
     poster: Option<String>,
     meta: String,
 ) -> impl IntoView {
     let nav = nav();
-    let episode_title = episode.title.clone().unwrap_or_default();
+    let second_line = match &episode {
+        Some(e) => view! {
+            <span class="ep-code">{e.code()}</span>
+            " "
+            {e.title.clone().unwrap_or_default()}
+        }
+        .into_any(),
+        None => view! { <span class="ep-code">"Movie"</span> }.into_any(),
+    };
     view! {
         <li class="row">
             <div
                 class="tap"
-                on:click=move |_| {
-                    if let Some(id) = show_id {
-                        nav.open_show(id);
-                    }
+                on:click=move |_| match (id, movie) {
+                    (Some(id), true) => nav.open_movie(id),
+                    (Some(id), false) => nav.open_show(id),
+                    _ => {}
                 }
             >
                 <Poster src=poster class="thumb"/>
                 <div class="info">
                     <p class="show">{title}</p>
-                    <p class="episode">
-                        <span class="ep-code">{episode.code()}</span>
-                        " "
-                        {episode_title}
-                    </p>
+                    <p class="episode">{second_line}</p>
                     <p class="meta">{meta}</p>
                 </div>
             </div>

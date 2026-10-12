@@ -64,6 +64,72 @@ impl Episode {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Movie {
+    pub title: Option<String>,
+    pub year: Option<i32>,
+    pub ids: Ids,
+    // The fields below are only present with `?extended=full`.
+    #[serde(default)]
+    pub tagline: Option<String>,
+    #[serde(default)]
+    pub overview: Option<String>,
+    /// Release date as `YYYY-MM-DD`; kept as text so an odd value can't fail
+    /// a whole list. See [`Movie::released_on`].
+    #[serde(default)]
+    pub released: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<u32>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub rating: Option<f64>,
+    #[serde(default)]
+    pub genres: Option<Vec<String>>,
+    #[serde(default)]
+    pub certification: Option<String>,
+}
+
+impl Movie {
+    pub fn display_title(&self) -> &str {
+        self.title.as_deref().unwrap_or("Untitled")
+    }
+
+    pub fn released_on(&self) -> Option<chrono::NaiveDate> {
+        chrono::NaiveDate::parse_from_str(self.released.as_deref()?, "%Y-%m-%d").ok()
+    }
+}
+
+/// One entry of `GET /sync/watched/movies`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WatchedMovie {
+    #[serde(default)]
+    pub plays: u32,
+    pub last_watched_at: Option<DateTime<Utc>>,
+    pub movie: Movie,
+}
+
+/// One entry of `GET /sync/watchlist/movies`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WatchlistMovie {
+    pub listed_at: DateTime<Utc>,
+    pub movie: Movie,
+}
+
+/// One entry of `GET /calendars/my/movies/{start}/{days}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalendarMovie {
+    pub released: String,
+    pub movie: Movie,
+}
+
+/// One entry of `GET /search/movie`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MovieSearchResult {
+    pub score: Option<f64>,
+    pub movie: Movie,
+}
+
 /// One entry of `GET /sync/watched/shows`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WatchedShow {
@@ -300,6 +366,21 @@ mod tests {
             Some("mdblist")
         );
         assert_eq!(list("Shows to watch with Sam").managed_by(), None);
+    }
+
+    #[test]
+    fn parses_movies_leniently() {
+        let json = r#"{"title": "Arrival", "year": 2016, "ids": {"trakt": 1, "tmdb": 329865},
+                       "released": "2016-11-11", "runtime": 116}"#;
+        let movie: Movie = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            movie.released_on(),
+            chrono::NaiveDate::from_ymd_opt(2016, 11, 11)
+        );
+        let odd: Movie =
+            serde_json::from_str(r#"{"title": "X", "year": null, "ids": {}, "released": ""}"#)
+                .unwrap();
+        assert_eq!(odd.released_on(), None);
     }
 
     #[test]
