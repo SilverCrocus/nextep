@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use nextep_core::ai::AiConfig;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::{Labels, ShowStatus};
-use nextep_core::models::{TraktList, WatchedMovie, WatchlistMovie};
+use nextep_core::models::{Show, ShowPeople, TraktList, WatchedMovie, WatchlistMovie};
 use nextep_core::progress::ProgressItem;
 use nextep_core::sync::{self, ProgressCache};
 use nextep_core::tmdb::{ArtworkCache, Media, Size, TmdbClient};
@@ -32,6 +32,20 @@ const AI_FILE: &str = "ai_settings.json";
 /// Trakt again.
 const REUSE_SECS: i64 = 120;
 
+/// Trakt's recommendations and trending shift slowly, so Discover and AI
+/// picks reuse them for this long unless Discover is refreshed.
+const FEEDS_REUSE_SECS: i64 = 30 * 60;
+
+/// Candidate shows from Trakt for Discover and AI picks. `None` and missing
+/// entries haven't been fetched (or failed) yet.
+#[derive(Clone, Default)]
+pub struct Feeds {
+    pub recommended: Option<Vec<Show>>,
+    pub trending: Option<Vec<Show>>,
+    /// Shows related to a watched show, by its Trakt id.
+    pub related: HashMap<u64, Vec<Show>>,
+}
+
 pub struct AppState {
     dir: PathBuf,
     pub trakt: Mutex<TraktClient>,
@@ -49,6 +63,9 @@ pub struct AppState {
     ai: Mutex<Option<AiConfig>>,
     /// Watched movies and the movie watchlist, from the latest fetch.
     movies: Mutex<Option<(DateTime<Utc>, MovieData)>>,
+    feeds: Mutex<Option<(DateTime<Utc>, Feeds)>>,
+    /// Cast and crew of shows, kept between AI picks requests.
+    pub people: Mutex<HashMap<u64, ShowPeople>>,
 }
 
 type MovieData = (Vec<WatchedMovie>, Vec<WatchlistMovie>);
@@ -69,6 +86,8 @@ impl AppState {
             list_members: Mutex::new(HashMap::new()),
             ai: Mutex::new(read(&dir, AI_FILE)),
             movies: Mutex::new(None),
+            feeds: Mutex::new(None),
+            people: Mutex::new(HashMap::new()),
             dir,
         }
     }
@@ -131,6 +150,8 @@ impl AppState {
         *self.lists.lock().await = None;
         self.list_members.lock().await.clear();
         *self.movies.lock().await = None;
+        *self.feeds.lock().await = None;
+        self.people.lock().await.clear();
         for name in [TOKEN_FILE, PROGRESS_FILE, LABELS_FILE] {
             let _ = fs::remove_file(self.dir.join(name));
         }
@@ -324,6 +345,23 @@ impl AppState {
             .map_err(to_ui_error)?;
         *self.movies.lock().await = Some((Utc::now(), data.clone()));
         Ok(data)
+    }
+
+    /// The Trakt feeds fetched in the last half hour, with when they were
+    /// first fetched; empty if `force` is set or they are older.
+    pub async fn feeds(&self, force: bool) -> (DateTime<Utc>, Feeds) {
+        match &*self.feeds.lock().await {
+            Some((at, feeds))
+                if !force && Utc::now() - *at < Duration::seconds(FEEDS_REUSE_SECS) =>
+            {
+                (*at, feeds.clone())
+            }
+            _ => (Utc::now(), Feeds::default()),
+        }
+    }
+
+    pub async fn remember_feeds(&self, at: DateTime<Utc>, feeds: Feeds) {
+        *self.feeds.lock().await = Some((at, feeds));
     }
 
     pub async fn invalidate_movies(&self) {

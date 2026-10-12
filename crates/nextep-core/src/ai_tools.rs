@@ -3,7 +3,8 @@
 //! creators, directors, writers) behind shows.
 //!
 //! History tools answer from data already on the device. The people tools
-//! look shows up on Trakt and cache the answers for the request.
+//! look shows up on Trakt; the answers can be kept between requests with
+//! [`ToolBox::with_people`] and [`ToolBox::into_people`].
 
 use std::collections::{HashMap, HashSet};
 
@@ -103,6 +104,17 @@ impl ToolBox {
             client,
             people: HashMap::new(),
         }
+    }
+
+    /// Starts from people already looked up by an earlier request.
+    pub fn with_people(mut self, people: HashMap<u64, ShowPeople>) -> Self {
+        self.people = people;
+        self
+    }
+
+    /// The people looked up so far, to reuse in the next request.
+    pub fn into_people(self) -> HashMap<u64, ShowPeople> {
+        self.people
     }
 
     /// Tool definitions in the OpenAI / DeepSeek `tools` format.
@@ -254,7 +266,9 @@ impl ToolBox {
         Ok(&self.people[&show_id])
     }
 
-    async fn favourite_people(&mut self) -> Value {
+    /// Actors, creators, directors and writers in several recently liked
+    /// shows. Looks up the shows' people all at once.
+    pub async fn favourite_people(&mut self) -> Value {
         let liked: Vec<(u64, String)> = self
             .shows
             .iter()
@@ -262,11 +276,13 @@ impl ToolBox {
             .take(PEOPLE_SHOWS)
             .map(|s| (s.id, s.title.clone()))
             .collect();
+        let ids: Vec<u64> = liked.iter().map(|(id, _)| *id).collect();
+        fetch_people(&self.client, &ids, &mut self.people).await;
 
         // person -> (roles, shows)
         let mut seen: HashMap<String, (HashSet<String>, Vec<String>)> = HashMap::new();
         for (id, title) in &liked {
-            let Ok(people) = self.people_of(*id).await else {
+            let Some(people) = self.people.get(id) else {
                 continue;
             };
             for (name, role) in key_people(people) {
@@ -294,6 +310,27 @@ impl ToolBox {
                 })
                 .collect::<Vec<_>>(),
         })
+    }
+}
+
+/// Looks up the people of the shows not in `cache` yet, in parallel, and
+/// adds them. Shows that fail to load are left out.
+pub async fn fetch_people(
+    client: &TraktClient,
+    show_ids: &[u64],
+    cache: &mut HashMap<u64, ShowPeople>,
+) {
+    let mut seen = HashSet::new();
+    let missing: Vec<u64> = show_ids
+        .iter()
+        .copied()
+        .filter(|id| !cache.contains_key(id) && seen.insert(*id))
+        .collect();
+    let found = futures::future::join_all(missing.iter().map(|&id| client.show_people(id))).await;
+    for (id, people) in missing.into_iter().zip(found) {
+        if let Ok(people) = people {
+            cache.insert(id, people);
+        }
     }
 }
 
@@ -475,6 +512,33 @@ mod tests {
         let mut tools = toolbox();
         assert!(tools.call("nope", &json!({})).await["error"].is_string());
         assert!(tools.call("show_people", &json!({})).await["error"].is_string());
+    }
+
+    #[tokio::test]
+    async fn favourite_people_reuses_people_from_earlier_requests() {
+        let cast = |names: &[&str]| ShowPeople {
+            cast: Some(
+                names
+                    .iter()
+                    .map(|n| CastMember {
+                        characters: vec![],
+                        episode_count: None,
+                        person: Person { name: (*n).into() },
+                    })
+                    .collect(),
+            ),
+            crew: None,
+        };
+        // Both liked shows are cached, so nothing is fetched from Trakt.
+        let mut tools = toolbox().with_people(HashMap::from([
+            (1, cast(&["Shared Actor", "Only Old"])),
+            (2, cast(&["Shared Actor", "Only Recent"])),
+        ]));
+        let people = tools.call("favourite_people", &json!({})).await;
+        let repeat = &people["people_in_several_liked_shows"];
+        assert_eq!(repeat.as_array().unwrap().len(), 1);
+        assert_eq!(repeat[0]["name"], "Shared Actor");
+        assert_eq!(tools.into_people().len(), 2);
     }
 
     #[test]

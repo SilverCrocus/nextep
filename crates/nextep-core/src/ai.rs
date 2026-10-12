@@ -9,6 +9,7 @@
 //! for: recent shows, a taste profile, dropped shows and cast and crew.
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -221,11 +222,18 @@ fn base(config: &AiConfig) -> &str {
     config.base_url.trim_end_matches('/')
 }
 
+/// One client for every request, so later asks reuse the open connection
+/// instead of paying for a new TLS handshake.
 fn client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = reqwest::Client::builder()
         // Maximum thinking over a hundred candidates can take a while.
         .timeout(Duration::from_secs(300))
-        .build()?)
+        .build()?;
+    Ok(CLIENT.get_or_init(|| client).clone())
 }
 
 async fn check(res: reqwest::Response) -> Result<reqwest::Response> {

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::state::{AppState, to_ui_error};
+use crate::state::{AppState, Feeds, to_ui_error};
 use crate::{TMDB_API_KEY, TRAKT_CLIENT_ID};
 
 // ---- status & sign-in -------------------------------------------------------
@@ -626,22 +626,14 @@ async fn gather(state: &AppState, client: &TraktClient, force: bool) -> Result<D
         .map(|i| i.show.clone())
         .collect();
 
-    let (recommended, trending, related) = futures::join!(
-        client.recommended_shows(40),
-        client.trending_shows(30),
-        futures::future::join_all(
-            recent
-                .iter()
-                .map(|s| client.related_shows(s.ids.trakt.unwrap_or_default(), 20))
-        ),
-    );
-    let recommended = recommended.unwrap_or_default();
-    let trending: Vec<Show> = trending
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| t.show)
+    let seeds: Vec<u64> = recent.iter().filter_map(|s| s.ids.trakt).collect();
+    let feeds = feeds(state, client, &seeds, force).await;
+    let recommended = feeds.recommended.unwrap_or_default();
+    let trending = feeds.trending.unwrap_or_default();
+    let related: Vec<Vec<Show>> = seeds
+        .iter()
+        .map(|id| feeds.related.get(id).cloned().unwrap_or_default())
         .collect();
-    let related: Vec<Vec<Show>> = related.into_iter().map(Result::unwrap_or_default).collect();
 
     let fresh = |shows: Vec<Show>| -> Vec<Show> {
         let mut seen = HashSet::new();
@@ -688,6 +680,45 @@ async fn gather(state: &AppState, client: &TraktClient, force: bool) -> Result<D
         model,
         rows,
     })
+}
+
+/// Trakt's recommended and trending shows and the shows related to `seeds`,
+/// reusing a recent fetch and fetching only what's missing.
+async fn feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force: bool) -> Feeds {
+    let (at, mut feeds) = state.feeds(force).await;
+    let missing: Vec<u64> = seeds
+        .iter()
+        .copied()
+        .filter(|id| !feeds.related.contains_key(id))
+        .collect();
+    let (recommended, trending, related) = futures::join!(
+        async {
+            match &feeds.recommended {
+                Some(_) => None,
+                None => client.recommended_shows(40).await.ok(),
+            }
+        },
+        async {
+            match &feeds.trending {
+                Some(_) => None,
+                None => client.trending_shows(30).await.ok(),
+            }
+        },
+        futures::future::join_all(missing.iter().map(|&id| client.related_shows(id, 20))),
+    );
+    if recommended.is_some() {
+        feeds.recommended = recommended;
+    }
+    if let Some(trending) = trending {
+        feeds.trending = Some(trending.into_iter().map(|t| t.show).collect());
+    }
+    for (id, shows) in missing.into_iter().zip(related) {
+        if let Ok(shows) = shows {
+            feeds.related.insert(id, shows);
+        }
+    }
+    state.remember_feeds(at, feeds.clone()).await;
+    feeds
 }
 
 fn match_pct(model: &TasteModel, show: &Show) -> Option<u8> {
@@ -901,10 +932,12 @@ pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<Ai
     let mut tools = {
         let labels = state.labels.lock().await;
         ToolBox::new(&items, &labels, client.clone(), Utc::now())
-    };
-    let picks = ai::pick(&config, mood, &candidates, &mut tools)
-        .await
-        .map_err(to_ui_error)?;
+    }
+    .with_people(state.people.lock().await.clone());
+    let picks = ai::pick(&config, mood, &candidates, &mut tools).await;
+    // Keep the cast and crew looked up for the next ask, even if this one failed.
+    *state.people.lock().await = tools.into_people();
+    let picks = picks.map_err(to_ui_error)?;
     if picks.is_empty() {
         return Err("The AI didn't return any picks. Try describing the mood differently.".into());
     }
