@@ -5,7 +5,7 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use nextep_core::ai;
-use nextep_core::ai_tools::ToolBox;
+use nextep_core::ai_context::TasteContext;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::ShowStatus;
 use nextep_core::models::{Episode, Show, TraktList};
@@ -871,7 +871,8 @@ pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<Ai
     let client = state.signed_in_client().await?;
     let found = gather(&state, &client, false).await?;
 
-    // Unique candidates, best taste match first, capped to keep requests small.
+    // Unique candidates, best taste match first, capped to keep the request
+    // (and the model's thinking) small.
     let mut seen = HashSet::new();
     let mut shows: Vec<&Show> = found
         .rows
@@ -882,7 +883,7 @@ pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<Ai
     if found.model.is_useful() {
         shows.sort_by(|a, b| found.model.score(b).total_cmp(&found.model.score(a)));
     }
-    shows.truncate(120);
+    shows.truncate(50);
     let candidates: Vec<ai::Candidate> = shows
         .iter()
         .filter_map(|s| {
@@ -896,13 +897,15 @@ pub async fn ai_picks(state: State<'_, AppState>, mood: String) -> Result<Vec<Ai
         })
         .collect();
 
-    // The AI looks at your history and cast & crew through these tools.
+    // Your history and favourite cast & crew go in the prompt, so this is a
+    // single request to the AI.
     let items = state.items(false).await?;
-    let mut tools = {
+    let context = {
         let labels = state.labels.lock().await;
-        ToolBox::new(&items, &labels, client.clone(), Utc::now())
+        TasteContext::new(&items, &labels, Utc::now())
     };
-    let picks = ai::pick(&config, mood, &candidates, &mut tools)
+    let taste = context.to_prompt_json(&client).await;
+    let picks = ai::pick(&config, mood, &candidates, &taste)
         .await
         .map_err(to_ui_error)?;
     if picks.is_empty() {
