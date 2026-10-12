@@ -184,6 +184,7 @@ fn SignIn(on_signed_in: Callback<()>) -> impl IntoView {
 
     view! {
         <main class="screen signin">
+            <img class="brand-logo" src="logo.png" alt="" width="128" height="128"/>
             <h1 class="brand">"Nextep"</h1>
             {move || match code.get() {
                 None => view! {

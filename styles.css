@@ -154,6 +154,13 @@ button {
   text-align: center;
 }
 
+.brand-logo {
+  display: block;
+  width: 128px;
+  height: 128px;
+  object-fit: contain;
+}
+
 .brand {
   margin: 0 0 8px;
   font-size: 2.25rem;

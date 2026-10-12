@@ -1,0 +1,17 @@
+Tool: built-in image_gen.imagegen
+
+TV refinement prompt
+
+Use case: precise-object-edit. Asset type: final Android launcher icon and app-brand image for Nextep.
+Input image: edit target, the selected Screen Pal concept.
+Primary request: keep the existing coral mascot exactly recognizable, but change only the blue-grey object it is holding into a clearly recognizable small television.
+Invariants: preserve the mascot's rounded coral body, two rounded ear bumps, oval glossy dark eyes, tiny happy smile, two paws resting on the top edge, face proportions, color palette, gentle illustrated shading, straight-on composition and uniform dark charcoal background. Preserve the overall personality and polished illustration style.
+Change the object: create a wide landscape television with a clearly visible blue-grey outer bezel and a distinct inset dark glass screen. Rounded rectangle with modest corner radius, rather than an amorphous pill shape. Give the television two short splayed feet visible below, and one tiny warm-white power indicator at the lower-right bezel. A soft lavender reflection on the glass makes the screen clear, without any displayed content. The paws sit on the top bezel, with the mascot peeking over it. Keep the TV simple and bold enough to read at small icon sizes.
+Composition: center the mascot and TV together on a square canvas with uniform full-bleed dark charcoal #121212 background. Entire visible silhouette including ears and feet fits comfortably within the middle approximately 62% of the square with generous even margin; no cropped parts.
+Avoid: changing the face or expression, letters, text, wordmarks, logos, play buttons, arrows, media controls, antennas, extra props, additional characters, room scenery, floor, border, mockup, watermark. Deliver one square icon image.
+
+Transparent foreground prompt
+
+Use case: background-extraction. Asset type: transparent foreground layer for the Nextep Android launcher icon and logo.
+Input image: edit target.
+Change only the background: remove the dark charcoal background completely and replace it with genuine alpha transparency. Preserve the exact coral mascot, ear bumps, eyes, smile, paws, entire television, visible blue-grey bezel, glass screen reflection, warm power indicator, and both TV feet. Preserve all foreground colors, shading, shapes, proportions, positions, and scale. Keep the same square canvas and even transparent margins. The dark glass inside the television remains opaque; remove only the background around the object. Do not introduce a new background, checkerboard artwork, outline, shadow, text, lettering, media-control symbols, props or any other design change. Return the same selected illustration as a clean high-quality transparent PNG cutout.
