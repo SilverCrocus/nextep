@@ -10,7 +10,7 @@ what gets used daily stays, the rest is cut or deferred.
   - [x] One-tap ✓ to mark the next episode watched (synced to Trakt)
   - [x] Sections: *New episodes*, *Upcoming*, *Watching*
   - [x] Sort: recently watched, title, episodes left, newest episode
-  - [ ] Pull to refresh (a Refresh button exists)
+  - [x] Pull to refresh
 - [x] **On hold / Dropped** labels: hide a show from Progress and Calendar
       without touching Trakt history; watching it again clears the label
 - [x] **Calendar**: upcoming episodes for followed shows, grouped by day
@@ -21,17 +21,17 @@ what gets used daily stays, the rest is cut or deferred.
 - [x] **Search** shows and add to watchlist
 - [x] On hold / Dropped saved on Trakt (hidden from progress / dropped)
 - [x] Updates: signed releases on GitHub, Obtainium support, in-app banner
-- [ ] Local cache (SQLite) so the app opens instantly and works offline
+- [x] Opens instantly and works offline (last good result of each screen is saved)
 
 ## Later
 
-- Movies (watchlist and watched)
-- Trakt lists (including third-party lists such as couchmoney and mdblist)
-- New-episode notifications
-- Home-screen widget
-- Statistics (time watched, top genres)
-- Where to stream (JustWatch data via TMDB)
-- History view
+- [ ] Movies (watchlist and watched)
+- [ ] Trakt lists (including third-party lists such as couchmoney and mdblist)
+- [ ] New-episode notifications
+- [ ] Home-screen widget
+- [ ] Statistics (time watched, top genres)
+- [x] Where to stream (JustWatch data via TMDB), on the show page
+- [x] History view (Calendar → History)
 
 ## Cut
 
