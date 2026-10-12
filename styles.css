@@ -1,0 +1,120 @@
+:root {
+  --bg: #121212;
+  --surface: #1e1e1e;
+  --text: #f2f2f2;
+  --muted: #9a9a9a;
+  --accent: #e8453c;
+  --warn: #f2b134;
+
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Roboto", sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding-top: env(safe-area-inset-top);
+}
+
+.top {
+  padding: 16px 16px 8px;
+}
+
+.top h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+.content {
+  flex: 1;
+  padding: 0 16px 96px;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 25vh;
+  text-align: center;
+}
+
+.empty .title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.hint,
+.version {
+  margin: 0;
+  color: var(--muted);
+}
+
+.version {
+  font-size: 0.8rem;
+}
+
+.warn {
+  margin: 0;
+  color: var(--warn);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+}
+
+.primary {
+  padding: 12px 24px;
+  border-radius: 999px;
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.primary:disabled {
+  opacity: 0.5;
+}
+
+.tabs {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: space-around;
+  padding: 8px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.tabs button {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.tabs button.active {
+  color: var(--text);
+  background: #2c2c2c;
+  font-weight: 600;
+}

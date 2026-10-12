@@ -1,0 +1,34 @@
+# Leptos frontend (compiled to WebAssembly by Trunk) and the workspace root.
+[package]
+name = "nextep-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1.7"
+
+[workspace]
+members = ["src-tauri", "crates/nextep-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/SilverCrocus/nextep"
+
+# Profiles only take effect in the workspace root.
+# Size tips: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
