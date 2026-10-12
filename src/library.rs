@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use serde::Serialize;
 
 use crate::api::{self, Card, LibraryView};
 use crate::app::{Poster, nav};
@@ -54,14 +55,50 @@ pub fn Library() -> impl IntoView {
     let error = RwSignal::new(None::<String>);
     let group = RwSignal::new(Group::Watching);
 
-    Effect::new(move |_| {
-        nav.changed.track();
+    let load = move |force: bool| {
+        #[derive(Serialize)]
+        struct Args {
+            force: bool,
+            cached: bool,
+        }
+        error.set(None);
         spawn_local(async move {
-            match api::call::<LibraryView>("library", ()).await {
+            // Last saved library first, then fresh data.
+            if data.get_untracked().is_none()
+                && let Ok(v) = api::call::<LibraryView>(
+                    "library",
+                    Args {
+                        force,
+                        cached: true,
+                    },
+                )
+                .await
+            {
+                data.set(Some(v));
+            }
+            match api::call::<LibraryView>(
+                "library",
+                Args {
+                    force,
+                    cached: false,
+                },
+            )
+            .await
+            {
                 Ok(v) => data.set(Some(v)),
                 Err(e) => nav.report(e, error),
             }
         });
+    };
+    Effect::new(move |_| {
+        nav.changed.track();
+        load(false);
+    });
+    Effect::new(move |first_run: Option<()>| {
+        nav.refresh.track();
+        if first_run.is_some() {
+            load(true);
+        }
     });
 
     let sign_out = move |_| {

@@ -10,10 +10,10 @@ use nextep_core::models::{Episode, Show};
 use nextep_core::progress::{
     self, ProgressItem, ProgressOptions, ProgressView, SortBy, title_sort_key,
 };
-use nextep_core::tmdb::Size;
+use nextep_core::tmdb::{Provider, Size};
 use nextep_core::trakt::{DeviceCode, DevicePoll};
 use nextep_core::update::{self, Release};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
@@ -117,13 +117,19 @@ pub async fn check_update() -> Result<Option<Release>, String> {
 
 // ---- progress ---------------------------------------------------------------
 
+/// `cached` returns the last saved result instantly without calling Trakt.
 #[tauri::command]
 pub async fn progress(
     state: State<'_, AppState>,
     sort: Option<SortBy>,
     force: Option<bool>,
+    cached: Option<bool>,
 ) -> Result<ProgressView, String> {
-    let mut items = state.items(force.unwrap_or(false)).await?;
+    let mut items: Vec<ProgressItem> = if cached.unwrap_or(false) {
+        state.snapshot("items")?
+    } else {
+        state.items(force.unwrap_or(false)).await?
+    };
     let labels = state.labels.lock().await;
     items.retain(|i| !labels.is_hidden(i.show.ids.trakt));
     let opts = ProgressOptions {
@@ -238,7 +244,7 @@ pub async fn set_watchlist(
 
 // ---- calendar ---------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CalendarItem {
     first_aired: DateTime<Utc>,
     show_id: Option<u64>,
@@ -250,7 +256,13 @@ pub struct CalendarItem {
 /// Episodes airing in the next month for followed shows, minus shows that are
 /// on hold or dropped. Starts a day early so the UI can cut at local midnight.
 #[tauri::command]
-pub async fn calendar(state: State<'_, AppState>) -> Result<Vec<CalendarItem>, String> {
+pub async fn calendar(
+    state: State<'_, AppState>,
+    cached: Option<bool>,
+) -> Result<Vec<CalendarItem>, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("calendar");
+    }
     let client = state.signed_in_client().await?;
     let start = (Utc::now() - Duration::days(1)).date_naive();
     let entries = client.calendar(start, 32).await.map_err(to_ui_error)?;
@@ -266,7 +278,7 @@ pub async fn calendar(state: State<'_, AppState>) -> Result<Vec<CalendarItem>, S
         .fetch_artwork(entries.iter().filter_map(|e| e.show.ids.tmdb))
         .await;
     let artwork = state.artwork.lock().await;
-    Ok(entries
+    let items: Vec<CalendarItem> = entries
         .into_iter()
         .map(|e| CalendarItem {
             first_aired: e.first_aired,
@@ -275,12 +287,54 @@ pub async fn calendar(state: State<'_, AppState>) -> Result<Vec<CalendarItem>, S
             poster: artwork.poster_url(e.show.ids.tmdb, Size::Thumb),
             episode: e.episode,
         })
-        .collect())
+        .collect();
+    state.save_snapshot("calendar", &items);
+    Ok(items)
+}
+
+// ---- history ----------------------------------------------------------------
+
+#[derive(Serialize, Deserialize)]
+pub struct HistoryItem {
+    watched_at: DateTime<Utc>,
+    show_id: Option<u64>,
+    show_title: String,
+    episode: Episode,
+    poster: Option<String>,
+}
+
+/// The last 100 episodes watched, newest first.
+#[tauri::command]
+pub async fn history(
+    state: State<'_, AppState>,
+    cached: Option<bool>,
+) -> Result<Vec<HistoryItem>, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("history");
+    }
+    let client = state.signed_in_client().await?;
+    let entries = client.episode_history(100).await.map_err(to_ui_error)?;
+    state
+        .fetch_artwork(entries.iter().filter_map(|e| e.show.ids.tmdb))
+        .await;
+    let artwork = state.artwork.lock().await;
+    let items: Vec<HistoryItem> = entries
+        .into_iter()
+        .map(|e| HistoryItem {
+            watched_at: e.watched_at,
+            show_id: e.show.ids.trakt,
+            show_title: e.show.display_title().to_owned(),
+            poster: artwork.poster_url(e.show.ids.tmdb, Size::Thumb),
+            episode: e.episode,
+        })
+        .collect();
+    state.save_snapshot("history", &items);
+    Ok(items)
 }
 
 // ---- library ----------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Card {
     show_id: u64,
     title: String,
@@ -288,7 +342,7 @@ pub struct Card {
     note: String,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct LibraryView {
     watching: Vec<Card>,
     up_to_date: Vec<Card>,
@@ -299,8 +353,15 @@ pub struct LibraryView {
 }
 
 #[tauri::command]
-pub async fn library(state: State<'_, AppState>) -> Result<LibraryView, String> {
-    let mut items = state.items(false).await?;
+pub async fn library(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+    cached: Option<bool>,
+) -> Result<LibraryView, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("library");
+    }
+    let mut items = state.items(force.unwrap_or(false)).await?;
     let client = state.signed_in_client().await?;
     let watchlist = client.watchlist_shows().await.map_err(to_ui_error)?;
     state
@@ -378,6 +439,7 @@ pub async fn library(state: State<'_, AppState>) -> Result<LibraryView, String> 
     for group in [&mut view.finished, &mut view.on_hold, &mut view.dropped] {
         group.sort_by_key(|c| title_sort_key(&c.title));
     }
+    state.save_snapshot("library", &view);
     Ok(view)
 }
 
@@ -437,10 +499,17 @@ pub struct ShowDetails {
     completed: u32,
     next_episode: Option<Episode>,
     seasons: Vec<SeasonRow>,
+    /// Subscription and free services in the user's region.
+    streaming: Vec<Provider>,
 }
 
+/// `region` is an ISO 3166-1 country code for streaming availability.
 #[tauri::command]
-pub async fn show_details(state: State<'_, AppState>, show_id: u64) -> Result<ShowDetails, String> {
+pub async fn show_details(
+    state: State<'_, AppState>,
+    show_id: u64,
+    region: Option<String>,
+) -> Result<ShowDetails, String> {
     let client = state.signed_in_client().await?;
     let (show, progress, seasons) = futures::try_join!(
         client.show(show_id),
@@ -448,6 +517,14 @@ pub async fn show_details(state: State<'_, AppState>, show_id: u64) -> Result<Sh
         client.seasons(show_id),
     )
     .map_err(to_ui_error)?;
+
+    // Best effort: a failed lookup just means no "where to watch" row.
+    let streaming = match (state.tmdb(), show.ids.tmdb, region.as_deref()) {
+        (Some(tmdb), Some(tmdb_id), Some(region)) => {
+            tmdb.tv_streaming(tmdb_id, region).await.unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
 
     state.fetch_artwork(show.ids.tmdb).await;
     let (poster, backdrop) = {
@@ -511,5 +588,6 @@ pub async fn show_details(state: State<'_, AppState>, show_id: u64) -> Result<Sh
         completed: progress.completed,
         next_episode: progress.next_episode,
         seasons,
+        streaming,
     })
 }

@@ -35,6 +35,7 @@ pub fn run() {
             commands::mark_watched,
             commands::set_show_status,
             commands::calendar,
+            commands::history,
             commands::library,
             commands::show_details,
             commands::search,

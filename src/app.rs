@@ -7,6 +7,7 @@ use crate::api::{self, DeviceCode, NOT_SIGNED_IN, Status};
 use crate::calendar::Calendar;
 use crate::library::Library;
 use crate::progress::Progress;
+use crate::pull::PullToRefresh;
 use crate::search::SearchPage;
 use crate::show::ShowPage;
 
@@ -23,6 +24,8 @@ pub struct Nav {
     overlays: RwSignal<Vec<Overlay>>,
     /// Bumped when data changes (episode marked, label set) so lists reload.
     pub changed: RwSignal<u32>,
+    /// Bumped by pull-to-refresh: lists reload from Trakt, skipping caches.
+    pub refresh: RwSignal<u32>,
     pub sort: RwSignal<String>,
     pub version: RwSignal<String>,
     on_signed_out: Callback<()>,
@@ -51,6 +54,10 @@ impl Nav {
 
     pub fn data_changed(&self) {
         self.changed.update(|n| *n += 1);
+    }
+
+    pub fn refresh(&self) {
+        self.refresh.update(|n| *n += 1);
     }
 
     /// Shows an error from a backend call, or the sign-in screen if the
@@ -253,6 +260,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
     let nav = Nav {
         overlays,
         changed: RwSignal::new(0),
+        refresh: RwSignal::new(0),
         sort: RwSignal::new(sort),
         version,
         on_signed_out,
@@ -320,11 +328,13 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
             </header>
             {update_banner}
             <section class="content">
-                {move || match tab.get() {
-                    Tab::Progress => view! { <Progress/> }.into_any(),
-                    Tab::Calendar => view! { <Calendar/> }.into_any(),
-                    Tab::Library => view! { <Library/> }.into_any(),
-                }}
+                <PullToRefresh on_refresh=Callback::new(move |_| nav.refresh())>
+                    {move || match tab.get() {
+                        Tab::Progress => view! { <Progress/> }.into_any(),
+                        Tab::Calendar => view! { <Calendar/> }.into_any(),
+                        Tab::Library => view! { <Library/> }.into_any(),
+                    }}
+                </PullToRefresh>
             </section>
             <nav class="tabs">
                 {Tab::ALL

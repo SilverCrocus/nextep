@@ -19,9 +19,14 @@ pub fn ShowPage(show_id: u64) -> impl IntoView {
         #[serde(rename_all = "camelCase")]
         struct Args {
             show_id: u64,
+            region: String,
         }
         spawn_local(async move {
-            match api::call::<ShowDetails>("show_details", Args { show_id }).await {
+            let args = Args {
+                show_id,
+                region: api::region(),
+            };
+            match api::call::<ShowDetails>("show_details", args).await {
                 Ok(d) => {
                     // Start with the season of the next episode expanded.
                     if open_season.get_untracked().is_none() {
@@ -183,6 +188,26 @@ fn Details(
             </div>
             {next}
             {show.overview.map(|o| view! { <p class="overview">{o}</p> })}
+            {(!d.streaming.is_empty())
+                .then(|| {
+                    view! {
+                        <h2 class="section">"Where to watch"</h2>
+                        <div class="providers">
+                            {d.streaming
+                                .into_iter()
+                                .map(|p| {
+                                    view! {
+                                        <span class="provider">
+                                            {p.logo.map(|src| view! { <img src=src alt=""/> })}
+                                            {p.name}
+                                        </span>
+                                    }
+                                })
+                                .collect_view()}
+                        </div>
+                        <p class="hint small">"Streaming data from JustWatch"</p>
+                    }
+                })}
 
             <h2 class="section">"Seasons"</h2>
             <ul class="list">

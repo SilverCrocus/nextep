@@ -24,15 +24,23 @@ pub fn Progress() -> impl IntoView {
         struct Args {
             sort: String,
             force: bool,
+            cached: bool,
         }
+        let args = move |cached| Args {
+            sort: nav.sort.get_untracked(),
+            force,
+            cached,
+        };
         loading.set(true);
         error.set(None);
         spawn_local(async move {
-            let args = Args {
-                sort: nav.sort.get_untracked(),
-                force,
-            };
-            let result = api::call::<ProgressView>("progress", args).await;
+            // Show the last saved list instantly, then replace it with fresh data.
+            if data.get_untracked().is_none()
+                && let Ok(v) = api::call::<ProgressView>("progress", args(true)).await
+            {
+                data.set(Some(v));
+            }
+            let result = api::call::<ProgressView>("progress", args(false)).await;
             loading.set(false);
             match result {
                 Ok(v) => data.set(Some(v)),
@@ -40,10 +48,17 @@ pub fn Progress() -> impl IntoView {
             }
         });
     };
-    // Reload whenever something changed elsewhere (e.g. on the show page).
+    // Reload whenever something changed elsewhere (e.g. on the show page)...
     Effect::new(move |_| {
         nav.changed.track();
         load(false);
+    });
+    // ...and from Trakt, skipping caches, on pull-to-refresh.
+    Effect::new(move |first_run: Option<()>| {
+        nav.refresh.track();
+        if first_run.is_some() {
+            load(true);
+        }
     });
 
     let on_mark = Callback::new(move |episode_id: u64| {
@@ -71,9 +86,7 @@ pub fn Progress() -> impl IntoView {
                 <option value="episodes_left">"Fewest left"</option>
                 <option value="newest_episode">"Newest episode"</option>
             </select>
-            <button class="ghost" on:click=move |_| load(true) disabled=move || loading.get()>
-                {move || if loading.get() { "Refreshing…" } else { "Refresh" }}
-            </button>
+            {move || loading.get().then(|| view! { <span class="hint small">"Updating…"</span> })}
         </div>
         {move || error.get().map(|e| view! { <p class="warn">{e}</p> })}
         {move || match data.get() {

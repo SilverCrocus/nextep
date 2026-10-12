@@ -151,6 +151,21 @@ pub struct CalendarItem {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct HistoryItem {
+    pub watched_at: String,
+    pub show_id: Option<u64>,
+    pub show_title: String,
+    pub episode: Episode,
+    pub poster: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Provider {
+    pub name: String,
+    pub logo: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct Card {
     pub show_id: u64,
     pub title: String,
@@ -214,6 +229,7 @@ pub struct ShowDetails {
     pub completed: u32,
     pub next_episode: Option<Episode>,
     pub seasons: Vec<SeasonRow>,
+    pub streaming: Vec<Provider>,
 }
 
 // ---- browser helpers --------------------------------------------------------
@@ -273,6 +289,17 @@ pub fn save_pref(key: &str, value: &str) {
     if let Some(storage) = global("localStorage") {
         call_method(&storage, "setItem", &[key.into(), value.into()]);
     }
+}
+
+/// Country for streaming availability, from the device language ("en-AU"
+/// → "AU"). Falls back to the US.
+pub fn region() -> String {
+    language()
+        .rsplit(['-', '_'])
+        .next()
+        .filter(|r| r.len() == 2 && r.chars().all(|c| c.is_ascii_alphabetic()))
+        .map(|r| r.to_uppercase())
+        .unwrap_or_else(|| "US".into())
 }
 
 fn language() -> String {

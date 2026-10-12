@@ -660,3 +660,38 @@ select {
   font-size: 1rem;
   color: var(--muted);
 }
+
+/* ---- pull to refresh ---- */
+
+.ptr {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* ---- where to watch ---- */
+
+.providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  background: var(--surface);
+}
+
+.provider img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}

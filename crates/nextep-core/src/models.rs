@@ -126,6 +126,15 @@ pub struct CalendarEntry {
     pub show: Show,
 }
 
+/// One entry of `GET /sync/history/episodes`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub id: u64,
+    pub watched_at: DateTime<Utc>,
+    pub episode: Episode,
+    pub show: Show,
+}
+
 /// One entry of `GET /users/hidden/{section}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HiddenShow {

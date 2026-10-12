@@ -22,6 +22,7 @@ const TOKEN_FILE: &str = "trakt_token.json";
 const PROGRESS_FILE: &str = "progress_cache.json";
 const LABELS_FILE: &str = "labels.json";
 const ARTWORK_FILE: &str = "artwork_cache.json";
+const SNAPSHOT_PREFIX: &str = "snapshot_";
 
 /// Switching between tabs reuses a refresh this recent instead of calling
 /// Trakt again.
@@ -72,6 +73,21 @@ impl AppState {
         self.save(LABELS_FILE, labels)
     }
 
+    /// Saves the last good result of a screen so the next launch can show it
+    /// instantly (and offline) while fresh data loads.
+    pub fn save_snapshot<T: Serialize>(&self, name: &str, value: &T) {
+        let _ = self.save(&format!("{SNAPSHOT_PREFIX}{name}.json"), value);
+    }
+
+    pub fn snapshot<T: DeserializeOwned>(&self, name: &str) -> Result<T, String> {
+        read(&self.dir, &format!("{SNAPSHOT_PREFIX}{name}.json"))
+            .ok_or_else(|| "no_snapshot".into())
+    }
+
+    pub fn tmdb(&self) -> Option<&TmdbClient> {
+        self.tmdb.as_ref()
+    }
+
     /// Signing out forgets the account and its cached data. Labels live on
     /// Trakt, so signing back in restores them.
     pub async fn sign_out(&self) {
@@ -82,6 +98,17 @@ impl AppState {
         *self.watchlist.lock().await = None;
         for name in [TOKEN_FILE, PROGRESS_FILE, LABELS_FILE] {
             let _ = fs::remove_file(self.dir.join(name));
+        }
+        if let Ok(entries) = fs::read_dir(&self.dir) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(SNAPSHOT_PREFIX)
+                {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
         }
     }
 
@@ -159,6 +186,7 @@ impl AppState {
         }
         drop(artwork);
 
+        self.save_snapshot("items", &items);
         *self.items.lock().await = Some((now, items.clone()));
         Ok(items)
     }

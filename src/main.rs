@@ -3,6 +3,7 @@ mod app;
 mod calendar;
 mod library;
 mod progress;
+mod pull;
 mod search;
 mod show;
 

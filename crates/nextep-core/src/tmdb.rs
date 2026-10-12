@@ -1,5 +1,5 @@
 //! Posters and backdrops from TMDB, cached so each show is looked up once a
-//! month at most.
+//! month at most, and where a show can be streamed (data from JustWatch).
 //!
 //! This product uses the TMDB API but is not endorsed or certified by TMDB.
 
@@ -28,6 +28,37 @@ pub struct Artwork {
     pub backdrop_path: Option<String>,
 }
 
+/// A streaming service a show is on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Provider {
+    pub name: String,
+    pub logo: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProvidersResponse {
+    #[serde(default)]
+    results: HashMap<String, RegionProviders>,
+}
+
+#[derive(Deserialize)]
+struct RegionProviders {
+    #[serde(default)]
+    flatrate: Vec<RawProvider>,
+    #[serde(default)]
+    free: Vec<RawProvider>,
+    #[serde(default)]
+    ads: Vec<RawProvider>,
+}
+
+#[derive(Deserialize)]
+struct RawProvider {
+    provider_name: String,
+    logo_path: Option<String>,
+    #[serde(default)]
+    display_priority: i64,
+}
+
 impl TmdbClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
@@ -37,9 +68,41 @@ impl TmdbClient {
     }
 
     pub async fn tv_artwork(&self, tmdb_id: u64) -> Result<Artwork> {
+        self.get(&format!("/tv/{tmdb_id}")).await
+    }
+
+    /// Services that include the show in a subscription or for free in
+    /// `region` (ISO 3166-1, e.g. "AU"). Buy and rent offers are left out.
+    pub async fn tv_streaming(&self, tmdb_id: u64, region: &str) -> Result<Vec<Provider>> {
+        let res: ProvidersResponse = self.get(&format!("/tv/{tmdb_id}/watch/providers")).await?;
+        let Some(region) = res.results.get(&region.to_uppercase()) else {
+            return Ok(Vec::new());
+        };
+        let mut all: Vec<&RawProvider> = region
+            .flatrate
+            .iter()
+            .chain(&region.free)
+            .chain(&region.ads)
+            .collect();
+        all.sort_by_key(|p| p.display_priority);
+        let mut seen = HashSet::new();
+        Ok(all
+            .into_iter()
+            .filter(|p| seen.insert(p.provider_name.clone()))
+            .map(|p| Provider {
+                name: p.provider_name.clone(),
+                logo: p
+                    .logo_path
+                    .as_ref()
+                    .map(|path| format!("{IMAGE_URL}/w92{path}")),
+            })
+            .collect())
+    }
+
+    async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         let res = self
             .http
-            .get(format!("{API_URL}/tv/{tmdb_id}"))
+            .get(format!("{API_URL}{path}"))
             .query(&[("api_key", self.api_key.as_str())])
             .send()
             .await?;
