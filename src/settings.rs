@@ -196,10 +196,10 @@ pub fn SettingsPage() -> impl IntoView {
                 <label class="field">
                     <span class="field-label">"Thinking"</span>
                     <select prop:value=move || effort.get() on:change=move |ev| effort.set(event_target_value(&ev))>
-                        <option value="low">"Low (fast)"</option>
+                        <option value="none">"Off (fastest, a few seconds)"</option>
+                        <option value="low">"Low"</option>
                         <option value="high">"High"</option>
-                        <option value="max">"Max (slowest)"</option>
-                        <option value="none">"Off (fastest)"</option>
+                        <option value="max">"Max (slowest, a minute or more)"</option>
                         <option value="">"Provider default"</option>
                     </select>
                 </label>

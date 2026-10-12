@@ -21,9 +21,10 @@ use crate::{Error, Result};
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 pub const DEFAULT_MODEL: &str = "deepseek-flash";
 /// How hard thinking models think: DeepSeek takes `none`, `low`, `high`, `max`.
-/// Low by default: it answers in seconds, where max can think for a minute or
-/// more. Users can raise it in Settings.
-pub const DEFAULT_REASONING_EFFORT: &str = "low";
+/// Off by default: measured on a phone, deepseek-flash answered in 3–4 s with
+/// thinking off, 6–30 s on low and 45–80 s on max, with picks of similar
+/// quality. Users can turn it up in Settings.
+pub const DEFAULT_REASONING_EFFORT: &str = "none";
 const MAX_PICKS: usize = 10;
 /// Characters of each candidate's overview sent to the model.
 const OVERVIEW_CHARS: usize = 100;

@@ -153,7 +153,7 @@ fn AskAi() -> impl IntoView {
     let picks = RwSignal::new(None::<Vec<AiPick>>);
     let error = RwSignal::new(None::<String>);
     let asking = RwSignal::new(false);
-    // Seconds spent thinking; max thinking can take a minute or more.
+    // Seconds waited; with thinking turned up it can take a minute or more.
     let elapsed = RwSignal::new(0u32);
 
     // Picks for shows don't belong under Movies, and the other way round.
