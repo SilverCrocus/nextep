@@ -47,10 +47,13 @@ jobs:
 
       - uses: cargo-bins/cargo-binstall@main
 
+      # Pinned and --locked: if no prebuilt binary is found, binstall
+      # compiles from source, and unlocked builds can pull in incompatible
+      # dependency versions. The token avoids GitHub API rate limits.
       - name: Install trunk and tauri-cli
-        run: |
-          cargo binstall -y trunk
-          cargo binstall -y tauri-cli --version '^2'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall -y --locked trunk@0.21.14 tauri-cli@2.12.2
 
       - name: Signing key
         env:
