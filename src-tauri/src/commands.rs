@@ -646,9 +646,12 @@ fn by_match(mut items: Vec<Suggestion>) -> Vec<Suggestion> {
 /// Everything Discover and AI picks need: rows of shows or movies you
 /// haven't watched.
 struct Discovery {
+    model: TasteModel,
     /// Shows the taste model learned from (0 if it isn't used).
     learned_from: usize,
     rows: Vec<(String, Vec<Suggestion>)>,
+    /// Ids not to suggest: watched (or, for shows, labelled).
+    exclude: HashSet<u64>,
 }
 
 impl Discovery {
@@ -804,7 +807,9 @@ async fn gather(
 
     Ok(Discovery {
         learned_from: if model.is_useful() { examples } else { 0 },
+        model,
         rows,
+        exclude,
     })
 }
 
@@ -1104,17 +1109,73 @@ pub async fn ai_picks(
         return Err("The AI didn't return any picks. Try describing the mood differently.".into());
     }
 
-    let artwork = state.artwork.lock().await;
-    Ok(picks
+    // Titles the AI named beyond the candidates are looked up on Trakt, all
+    // at once; ones Trakt doesn't have are dropped.
+    let looked_up = futures::future::join_all(picks.iter().map(|p| async {
+        match &p.choice {
+            ai::Choice::Title { title, year } => {
+                find_title(&client, media, &found.model, title, *year).await
+            }
+            ai::Choice::Candidate(_) => None,
+        }
+    }))
+    .await;
+    let mut seen = HashSet::new();
+    let chosen: Vec<(Suggestion, String)> = picks
         .into_iter()
-        .filter_map(|p| {
-            let s = suggestions.iter().find(|s| s.id == p.id)?;
-            Some(AiPickItem {
-                item: s.item(media, &artwork),
-                reason: p.reason,
-            })
+        .zip(looked_up)
+        .filter_map(|(pick, looked_up)| {
+            let suggestion = match pick.choice {
+                ai::Choice::Candidate(id) => suggestions.iter().find(|s| s.id == id).cloned(),
+                ai::Choice::Title { .. } => looked_up,
+            }?;
+            (!found.exclude.contains(&suggestion.id) && seen.insert(suggestion.id))
+                .then_some((suggestion, pick.reason))
+        })
+        .collect();
+    if chosen.is_empty() {
+        return Err("Couldn't find the AI's picks on Trakt. Try again.".into());
+    }
+
+    let tmdb_ids = chosen.iter().filter_map(|(s, _)| s.tmdb);
+    match media {
+        Media::Tv => state.fetch_artwork(tmdb_ids).await,
+        Media::Movie => state.fetch_movie_artwork(tmdb_ids).await,
+    }
+    let artwork = state.artwork.lock().await;
+    Ok(chosen
+        .into_iter()
+        .map(|(s, reason)| AiPickItem {
+            item: s.item(media, &artwork),
+            reason,
         })
         .collect())
+}
+
+/// A show or movie the AI named, found on Trakt by its title and year.
+async fn find_title(
+    client: &TraktClient,
+    media: Media,
+    model: &TasteModel,
+    title: &str,
+    year: Option<i32>,
+) -> Option<Suggestion> {
+    match media {
+        Media::Tv => client
+            .search_shows(title)
+            .await
+            .ok()?
+            .into_iter()
+            .find(|r| ai::same_title(r.show.display_title(), r.show.year, title, year))
+            .and_then(|r| Suggestion::show(&r.show, model)),
+        Media::Movie => client
+            .search_movies(title)
+            .await
+            .ok()?
+            .into_iter()
+            .find(|r| ai::same_title(r.movie.display_title(), r.movie.year, title, year))
+            .and_then(|r| Suggestion::movie(&r.movie, model)),
+    }
 }
 
 // ---- lists ------------------------------------------------------------------

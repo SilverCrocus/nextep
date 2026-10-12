@@ -143,8 +143,9 @@ fn ShelfCard(item: DiscoverItem) -> impl IntoView {
     }
 }
 
-/// "What are you in the mood for?" box: the configured AI picks from the
-/// Discover candidates (shows or movies, following the switch) and says why.
+/// "What are you in the mood for?" box: the configured AI suggests shows or
+/// movies (following the switch), from Discover's rows or anything else it
+/// knows that Trakt has, and says why.
 #[component]
 fn AskAi() -> impl IntoView {
     let nav = nav();
@@ -218,7 +219,7 @@ fn AskAi() -> impl IntoView {
             <div class="ai-box">
                 <p class="show">"AI picks"</p>
                 <p class="hint small">
-                    "Describe a mood and an AI picks from these suggestions and says why. Add a DeepSeek (or other OpenAI-compatible) API key to turn it on."
+                    "Describe a mood and an AI suggests shows or movies for you and says why. Add a DeepSeek (or other OpenAI-compatible) API key to turn it on."
                 </p>
                 <button class="pill" on:click=move |_| nav.open_settings()>"Add a key in Settings"</button>
             </div>

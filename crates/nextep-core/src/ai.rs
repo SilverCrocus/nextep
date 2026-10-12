@@ -3,11 +3,11 @@
 //! the user's history and the people behind shows they liked (see
 //! `ai_context`).
 //!
-//! The model only ranks and explains real candidates that Nextep found on
-//! Trakt; any id it returns that isn't a candidate is dropped, so it can't
-//! recommend shows that don't exist. The user brings their own API key, which
-//! stays on the device. Requests include recent shows, a taste profile,
-//! dropped shows and favourite cast and crew.
+//! The model picks from candidates Nextep found on Trakt or names other
+//! titles it knows; the caller looks those up on Trakt and drops any it can't
+//! find, so nothing that doesn't exist is shown. The user brings their own
+//! API key, which stays on the device. Requests include recent shows, a taste
+//! profile, dropped shows, favourite cast and crew and titles already seen.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -25,7 +25,12 @@ pub const DEFAULT_MODEL: &str = "deepseek-flash";
 /// thinking off, 6–30 s on low and 45–80 s on max, with picks of similar
 /// quality. Users can turn it up in Settings.
 pub const DEFAULT_REASONING_EFFORT: &str = "none";
-const MAX_PICKS: usize = 10;
+/// Picks the model chooses itself, from everything it knows.
+const MAX_OWN: usize = 8;
+/// Picks it may take from the candidates. They come in a separate list with
+/// a hard cap: otherwise the model leans on them even when the mood calls for
+/// something else entirely.
+const MAX_LISTED: usize = 2;
 /// Characters of each candidate's overview sent to the model.
 const OVERVIEW_CHARS: usize = 100;
 
@@ -65,10 +70,63 @@ pub struct Candidate {
     pub overview: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Pick {
-    pub id: u64,
+    pub choice: Choice,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Choice {
+    /// One of the candidates, by id.
+    Candidate(u64),
+    /// A title the model knows that wasn't a candidate. It may not exist:
+    /// look it up before showing it.
+    Title { title: String, year: Option<i32> },
+}
+
+/// Whether a title found on Trakt is the one the model named: the same title
+/// (ignoring case, punctuation, "&" vs "and" and a leading "The") from the
+/// same year give or take two, or the same title before a subtitle ("Borat"
+/// for "Borat: Cultural Learnings…") from exactly the same year.
+pub fn same_title(
+    found: &str,
+    found_year: Option<i32>,
+    named: &str,
+    named_year: Option<i32>,
+) -> bool {
+    fn norm(title: &str) -> String {
+        let lower = title.to_lowercase().replace('&', " and ");
+        let words: Vec<String> = lower
+            .split_whitespace()
+            .map(|w| {
+                w.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect::<String>()
+            })
+            .filter(|w| !w.is_empty())
+            .collect();
+        let words = match words.first().map(String::as_str) {
+            Some("the") if words.len() > 1 => &words[1..],
+            _ => &words[..],
+        };
+        words.concat()
+    }
+    fn main_title(title: &str) -> &str {
+        title.split([':', '–', '—']).next().unwrap_or(title)
+    }
+    let full = norm(found);
+    if full.is_empty() {
+        return false;
+    }
+    // Festival premieres and wide releases can be a couple of years apart.
+    let close_year = match (found_year, named_year) {
+        (Some(a), Some(b)) => (a - b).abs() <= 2,
+        _ => true,
+    };
+    let same_year = matches!((found_year, named_year), (Some(a), Some(b)) if a == b);
+    (full == norm(named) && close_year)
+        || (norm(main_title(found)) == norm(main_title(named)) && same_year)
 }
 
 /// Model ids the API offers, which also checks that the key works.
@@ -138,11 +196,20 @@ fn prompt(kind: Kind, mood: &str, candidates: &[Candidate], taste: &Value) -> (S
          they got and whether they liked them), shows they dropped or didn't like, people \
          (actors, creators, directors, writers) who recur in shows they liked, and, when \
          present, the movies they watched most recently. Taste carries over between TV and \
-         film. Use it to understand their taste, then choose only from the numbered candidates you are given; \
-         never suggest anything else. Pick up to {MAX_PICKS} that best fit the user's mood and \
-         taste, best first. Reply with JSON only: {{\"picks\": [{{\"id\": <candidate id>, \"reason\": \"<one \
-         short sentence, addressed to the user, that can mention what in their history it \
-         matches>\"}}]}}"
+         film. `already_seen` lists {noun} they have watched or dropped: never recommend \
+         those.\n\n\
+         Recommend {noun} for the user's mood. Start from everything you know: think of the \
+         {noun} that best fit the mood, well known and lesser known, then use their taste to \
+         choose between them and order them. The mood comes first, even if it's a genre they \
+         rarely watch; taste comes second. Only include genuinely good fits: fewer picks are \
+         better than weak ones. The numbered list holds extra options found for this user on \
+         Trakt (recommendations, related and new titles you may not know).\n\n\
+         Reply with JSON only: {{\"picks\": [{{\"title\": \"<exact title>\", \"year\": <first \
+         release year>, \"reason\": \"<why>\"}}], \"from_list\": [{{\"id\": <number from the \
+         list>, \"reason\": \"<why>\"}}]}}. `picks` are your own choices, up to {MAX_OWN}, best \
+         first. `from_list` holds at most {MAX_LISTED} numbered options that fit the mood just \
+         as well; leave it empty when none do. Each reason is one short sentence, addressed to \
+         the user, that can mention what in their history it matches."
     );
     let candidate_lines: Vec<String> = candidates
         .iter()
@@ -164,7 +231,7 @@ fn prompt(kind: Kind, mood: &str, candidates: &[Candidate], taste: &Value) -> (S
         })
         .collect();
     let user = format!(
-        "My mood: {mood}\n\nMy taste:\n{taste}\n\nCandidates (id | title | about):\n{}",
+        "My mood: {mood}\n\nMy taste:\n{taste}\n\nExtra options from Trakt (id | title | about):\n{}",
         candidate_lines.join("\n")
     );
     (system, user)
@@ -176,13 +243,25 @@ fn parse_picks(content: &str, candidates: &[Candidate]) -> Vec<Pick> {
     struct Reply {
         #[serde(default)]
         picks: Vec<RawPick>,
+        #[serde(default)]
+        from_list: Vec<RawPick>,
     }
     #[derive(Deserialize)]
     struct RawPick {
-        id: serde_json::Value,
+        #[serde(default)]
+        id: Value,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        year: Value,
         #[serde(default)]
         reason: String,
     }
+    // Numbers sometimes come back as strings.
+    let number = |v: &Value| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+    };
 
     // Models sometimes wrap the JSON in a ```json fence or a sentence; take
     // the outermost object.
@@ -194,22 +273,42 @@ fn parse_picks(content: &str, candidates: &[Candidate]) -> Vec<Pick> {
         return Vec::new();
     };
     let known: HashSet<u64> = candidates.iter().map(|c| c.id).collect();
-    let mut seen = HashSet::new();
-    reply
-        .picks
-        .into_iter()
-        .filter_map(|p| {
-            // Accept the id as a number or a numeric string.
-            let id =
-                p.id.as_u64()
-                    .or_else(|| p.id.as_str().and_then(|s| s.trim().parse().ok()))?;
-            (known.contains(&id) && seen.insert(id)).then(|| Pick {
-                id,
-                reason: p.reason.trim().to_owned(),
-            })
-        })
-        .take(MAX_PICKS)
-        .collect()
+    let mut seen_ids = HashSet::new();
+    let mut seen_titles = HashSet::new();
+    let mut picks = Vec::new();
+    // Own choices first, then the list's; the caps hold wherever an entry
+    // turns up.
+    for p in reply.picks.into_iter().chain(reply.from_list) {
+        let reason = p.reason.trim().to_owned();
+        // A candidate id wins; an id that isn't a candidate is ignored and
+        // the title is looked up instead.
+        if let Some(id) = number(&p.id).filter(|id| known.contains(id)) {
+            if seen_ids.len() < MAX_LISTED && seen_ids.insert(id) {
+                picks.push(Pick {
+                    choice: Choice::Candidate(id),
+                    reason,
+                });
+            }
+            continue;
+        }
+        let Some(title) = p
+            .title
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+        else {
+            continue;
+        };
+        if seen_titles.len() < MAX_OWN && seen_titles.insert(title.to_lowercase()) {
+            picks.push(Pick {
+                choice: Choice::Title {
+                    title,
+                    year: number(&p.year).and_then(|y| i32::try_from(y).ok()),
+                },
+                reason,
+            });
+        }
+    }
+    picks
 }
 
 fn base(config: &AiConfig) -> &str {
@@ -266,27 +365,98 @@ mod tests {
     }
 
     #[test]
-    fn keeps_only_real_candidates_once() {
+    fn takes_candidates_and_other_titles_once_each() {
         let reply = r#"{"picks": [
-            {"id": 22, "reason": "Warm and funny."},
-            {"id": 999, "reason": "Made up."},
+            {"id": 22, "title": "Ted Lasso", "reason": "Warm and funny."},
+            {"id": 999, "reason": "Made-up id, no title."},
             {"id": "33", "reason": "Spy drama."},
-            {"id": 22, "reason": "Again."}
+            {"id": null, "title": "Parks and Recreation", "year": "2009", "reason": "Office-style."},
+            {"id": 999, "title": "Brooklyn Nine-Nine", "year": 2013, "reason": "Unknown id."},
+            {"id": 22, "reason": "Again."},
+            {"title": "parks and recreation", "reason": "Again, other case."}
         ]}"#;
         let picks = parse_picks(reply, &candidates());
+        let choices: Vec<&Choice> = picks.iter().map(|p| &p.choice).collect();
         assert_eq!(
-            picks,
+            choices,
             [
-                Pick {
-                    id: 22,
-                    reason: "Warm and funny.".into()
+                &Choice::Candidate(22),
+                &Choice::Candidate(33),
+                &Choice::Title {
+                    title: "Parks and Recreation".into(),
+                    year: Some(2009)
                 },
-                Pick {
-                    id: 33,
-                    reason: "Spy drama.".into()
+                &Choice::Title {
+                    title: "Brooklyn Nine-Nine".into(),
+                    year: Some(2013)
                 },
             ]
         );
+        assert_eq!(picks[2].reason, "Office-style.");
+    }
+
+    #[test]
+    fn caps_own_and_listed_picks_separately() {
+        let own: Vec<String> = (0..12)
+            .map(|i| format!(r#"{{"title": "Own {i}", "reason": "r"}}"#))
+            .collect();
+        let reply = format!(
+            r#"{{"picks": [{}], "from_list": [{{"id": 11}}, {{"id": 22}}, {{"id": 33}}]}}"#,
+            own.join(",")
+        );
+        let picks = parse_picks(&reply, &candidates());
+        let listed = picks
+            .iter()
+            .filter(|p| matches!(p.choice, Choice::Candidate(_)))
+            .count();
+        assert_eq!(listed, MAX_LISTED);
+        assert_eq!(picks.len(), MAX_OWN + MAX_LISTED);
+        // Own choices come first.
+        assert!(matches!(picks[0].choice, Choice::Title { .. }));
+    }
+
+    #[test]
+    fn matches_titles_the_model_names() {
+        assert!(same_title("The Office", Some(2005), "Office", Some(2005)));
+        assert!(same_title(
+            "Parks and Recreation",
+            Some(2009),
+            "Parks & Recreation",
+            None
+        ));
+        assert!(same_title(
+            "What We Do in the Shadows",
+            Some(2019),
+            "What We Do In The Shadows!",
+            Some(2018)
+        ));
+        assert!(same_title(
+            "The Blackcoat's Daughter",
+            Some(2017),
+            "The Blackcoat's Daughter",
+            Some(2015)
+        ));
+        assert!(same_title(
+            "Borat: Cultural Learnings of America for Make Benefit Glorious Nation of Kazakhstan",
+            Some(2006),
+            "Borat",
+            Some(2006)
+        ));
+        // The UK Office is a different show.
+        assert!(!same_title(
+            "The Office",
+            Some(2001),
+            "The Office",
+            Some(2005)
+        ));
+        // Same start, different film.
+        assert!(!same_title("Up in the Air", Some(2009), "Up", Some(2009)));
+        assert!(!same_title(
+            "Borat Subsequent Moviefilm",
+            Some(2020),
+            "Borat",
+            Some(2006)
+        ));
     }
 
     #[test]
@@ -356,7 +526,7 @@ mod tests {
         assert_eq!(
             picks,
             [Pick {
-                id: 33,
+                choice: Choice::Candidate(33),
                 reason: "Tense and witty.".into()
             }]
         );
@@ -400,7 +570,8 @@ mod tests {
         let taste = json!({ "recent_shows": [{ "title": "Slow Horses" }] });
         let (system, user) = prompt(Kind::Shows, "something cosy", &candidates(), &taste);
         assert!(system.starts_with("You recommend TV shows."));
-        assert!(system.contains("only from the numbered candidates"));
+        assert!(system.contains("Start from everything you know"));
+        assert!(system.contains("never recommend those"));
         assert!(user.contains("My mood: something cosy"));
         assert!(user.contains(r#"{"recent_shows":[{"title":"Slow Horses"}]}"#));
         assert!(user.contains("22 | Ted Lasso (2022) [drama] | About things."));

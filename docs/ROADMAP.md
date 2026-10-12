@@ -36,10 +36,13 @@ what gets used daily stays, the rest is cut or deferred.
         your own history (finished / watching = liked, dropped / on hold =
         not), scoring candidates by genre, network, rating, year and length
   - [x] Optional AI picks: describe a mood and an OpenAI-compatible API
-        (DeepSeek by default, deepseek-flash with adjustable thinking) picks
-        and explains real candidates from the rows above in a single
-        request that carries your history (recent shows, taste profile,
-        dropped shows) and the cast & crew of shows you liked.
+        (DeepSeek by default, deepseek-flash, thinking off unless raised)
+        suggests anything it knows that fits the mood, plus up to two from
+        the rows above, in a single request that carries your history
+        (recent shows, taste profile, dropped shows, everything already
+        seen) and the cast & crew of shows you liked. Its own suggestions
+        are looked up on Trakt; ones Trakt doesn't have, or you've seen,
+        are dropped.
         Bring-your-own key, stored only on the device
   - [x] Shows | Movies switch: the same rows and AI picks for movies
         (related to your last three movies, Trakt's movie picks, trending),

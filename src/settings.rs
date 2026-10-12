@@ -132,7 +132,7 @@ pub fn SettingsPage() -> impl IntoView {
 
                 <h2 class="section">"AI picks"</h2>
                 <p class="hint small">
-                    "Describe a mood in Discover and an AI picks from the shows or movies there. "
+                    "Describe a mood in Discover and an AI suggests shows or movies for you. "
                     "Works with DeepSeek or any OpenAI-compatible API. Your key stays on this phone; "
                     "each request sends your mood, titles you watched, liked and dropped, people from shows you liked, "
                     "and the candidates to the provider."

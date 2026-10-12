@@ -64,6 +64,8 @@ pub struct TasteContext {
     unwatched_dropped: Vec<ShowFacts>,
     /// Most recently watched movies first; empty unless added.
     movies: Vec<MovieFacts>,
+    /// Every watched movie as "Title (year)"; empty unless added.
+    seen_movies: Vec<String>,
 }
 
 impl TasteContext {
@@ -113,13 +115,19 @@ impl TasteContext {
             .collect();
         Self {
             movies: Vec::new(),
+            seen_movies: Vec::new(),
             shows,
             unwatched_dropped,
         }
     }
 
-    /// Adds the most recently watched movies, for movie picks.
+    /// Adds the movies watched, for movie picks: the most recent in full, and
+    /// all of them as titles the model mustn't suggest.
     pub fn with_movies(mut self, watched: &[WatchedMovie]) -> Self {
+        self.seen_movies = watched
+            .iter()
+            .map(|w| with_year(w.movie.display_title(), w.movie.year))
+            .collect();
         let mut watched: Vec<&WatchedMovie> = watched.iter().collect();
         watched.sort_by_key(|w| std::cmp::Reverse(w.last_watched_at));
         self.movies = watched
@@ -153,8 +161,18 @@ impl TasteContext {
             "dropped_shows": self.dropped_shows(),
             "favourite_people": self.favourite_people(client, people).await,
         });
-        if !self.movies.is_empty() {
+        // Titles not to suggest: the movies for movie picks, else the shows.
+        if self.seen_movies.is_empty() {
+            taste["already_seen"] = json!(
+                self.shows
+                    .iter()
+                    .chain(&self.unwatched_dropped)
+                    .map(|s| with_year(&s.title, s.year))
+                    .collect::<Vec<_>>()
+            );
+        } else {
             taste["recent_movies"] = json!(self.movies);
+            taste["already_seen"] = json!(self.seen_movies);
         }
         taste
     }
@@ -276,6 +294,13 @@ impl TasteContext {
                 })
                 .collect::<Vec<_>>(),
         })
+    }
+}
+
+fn with_year(title: &str, year: Option<i32>) -> String {
+    match year {
+        Some(year) => format!("{title} ({year})"),
+        None => title.to_owned(),
     }
 }
 
@@ -459,6 +484,8 @@ mod tests {
         assert_eq!(all["taste_profile"]["shows_watched"], 3);
         assert_eq!(all["recent_shows"].as_array().unwrap().len(), 3);
         assert_eq!(all["dropped_shows"][0]["title"], "Abandoned Reality");
+        assert_eq!(all["already_seen"].as_array().unwrap().len(), 3);
+        assert!(all.get("recent_movies").is_none());
         assert_eq!(
             all["favourite_people"]["people_in_several_liked_shows"],
             json!([])
@@ -485,6 +512,7 @@ mod tests {
             .await;
         assert_eq!(with["recent_movies"][0]["title"], "Newer");
         assert_eq!(with["recent_movies"][1]["title"], "Older");
+        assert_eq!(with["already_seen"], json!(["Older", "Newer"]));
     }
 
     #[tokio::test]
