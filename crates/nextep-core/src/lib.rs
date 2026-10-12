@@ -5,8 +5,10 @@
 
 pub mod models;
 pub mod progress;
+pub mod sync;
 pub mod trakt;
 
+pub use chrono;
 pub use trakt::TraktClient;
 
 #[derive(Debug, thiserror::Error)]

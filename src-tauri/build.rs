@@ -3,7 +3,7 @@
 //! Keys come from the environment (CI) or from `.env` in the repository root
 //! (local builds). `.env` is gitignored; see `.env.example`.
 
-const KEYS: [&str; 3] = ["TRAKT_CLIENT_ID", "TRAKT_CLIENT_SECRET", "TMDB_API_KEY"];
+const KEYS: [&str; 2] = ["TRAKT_CLIENT_ID", "TMDB_API_KEY"];
 
 fn main() {
     println!("cargo:rerun-if-changed=../.env");

@@ -1,13 +1,17 @@
 //! Minimal Trakt API v2 client covering what Nextep needs: sign-in, watched
 //! progress, the episode calendar, the watchlist and marking episodes watched.
 //!
-//! Docs: <https://trakt.docs.apiary.io/>
+//! Docs: <https://developer.trakt.tv/>. Spec: <https://github.com/trakt/trakt-api>.
+//!
+//! Nextep is a public client: it only has a Client ID. Trakt's `client_secret`
+//! is deprecated for apps that run on the user's device and is never sent.
 
 mod auth;
 
 pub use auth::{DeviceCode, DevicePoll, Token};
 
 use chrono::{DateTime, NaiveDate, Utc};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Method, RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -16,39 +20,46 @@ use crate::models::{CalendarEntry, ShowProgress, WatchedShow, WatchlistShow};
 use crate::{Error, Result};
 
 pub const API_URL: &str = "https://api.trakt.tv";
-const USER_AGENT: &str = concat!(
-    "Nextep/",
-    env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/SilverCrocus/nextep)"
-);
+/// Every OAuth request (device codes, token refresh, revoke) goes here.
+pub const AUTH_URL: &str = "https://auth.trakt.tv";
+/// Registered in the Trakt app settings. The device flow never opens it, but
+/// token refresh must send a URI that matches the settings exactly.
+pub const REDIRECT_URI: &str = "https://silvercrocus.github.io/nextep/callback";
+
+const USER_AGENT: &str = concat!("Nextep/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone)]
 pub struct TraktClient {
     http: reqwest::Client,
-    base_url: String,
+    api_url: String,
+    auth_url: String,
     client_id: String,
-    client_secret: String,
     token: Option<Token>,
 }
 
 impl TraktClient {
-    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
+    pub fn new(client_id: impl Into<String>) -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert("trakt-api-version", HeaderValue::from_static("2"));
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            .default_headers(headers)
             .build()
             .expect("static reqwest config is valid");
         Self {
             http,
-            base_url: API_URL.to_owned(),
+            api_url: API_URL.to_owned(),
+            auth_url: AUTH_URL.to_owned(),
             client_id: client_id.into(),
-            client_secret: client_secret.into(),
             token: None,
         }
     }
 
-    /// Points the client at another host, e.g. a local mock in tests.
+    /// Points API and OAuth requests at another host, e.g. a local mock in tests.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
+        self.api_url = base_url.into();
+        self.auth_url = self.api_url.clone();
         self
     }
 
@@ -64,19 +75,15 @@ impl TraktClient {
 
     pub async fn device_code(&self) -> Result<DeviceCode> {
         let req = self
-            .request(Method::POST, "/oauth/device/code")
+            .oauth("/oauth/device/code")
             .json(&json!({ "client_id": self.client_id }));
         send_json(req).await
     }
 
     pub async fn poll_device_token(&self, device_code: &str) -> Result<DevicePoll> {
         let res = self
-            .request(Method::POST, "/oauth/device/token")
-            .json(&json!({
-                "code": device_code,
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-            }))
+            .oauth("/oauth/device/token")
+            .json(&json!({ "code": device_code, "client_id": self.client_id }))
             .send()
             .await?;
         let status = res.status();
@@ -89,12 +96,13 @@ impl TraktClient {
         })
     }
 
+    /// Refresh tokens are single-use: persist the returned token before doing
+    /// anything else, or the user has to sign in again.
     pub async fn refresh_token(&self, refresh_token: &str) -> Result<Token> {
-        let req = self.request(Method::POST, "/oauth/token").json(&json!({
+        let req = self.oauth("/oauth/token").json(&json!({
             "refresh_token": refresh_token,
             "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
+            "redirect_uri": REDIRECT_URI,
             "grant_type": "refresh_token",
         }));
         send_json(req).await
@@ -107,10 +115,11 @@ impl TraktClient {
         send_json(self.authed(Method::GET, "/sync/watched/shows?extended=noseasons,full")?).await
     }
 
-    /// Watched/aired counts and the next episode to watch for one show.
+    /// Watched/aired counts and the next aired episode to watch for one show,
+    /// counted from the last episode the user watched.
     pub async fn show_progress(&self, show_trakt_id: u64) -> Result<ShowProgress> {
         let path = format!(
-            "/shows/{show_trakt_id}/progress/watched?hidden=false&specials=false&count_specials=false"
+            "/shows/{show_trakt_id}/progress/watched?hidden=false&specials=false&count_specials=false&last_activity=watched&extended=full"
         );
         send_json(self.authed(Method::GET, &path)?).await
     }
@@ -141,16 +150,17 @@ impl TraktClient {
 
     // ---- plumbing ---------------------------------------------------------
 
-    fn request(&self, method: Method, path: &str) -> RequestBuilder {
-        self.http
-            .request(method, format!("{}{path}", self.base_url))
-            .header("trakt-api-version", "2")
-            .header("trakt-api-key", &self.client_id)
+    fn oauth(&self, path: &str) -> RequestBuilder {
+        self.http.post(format!("{}{path}", self.auth_url))
     }
 
     fn authed(&self, method: Method, path: &str) -> Result<RequestBuilder> {
         let token = self.token.as_ref().ok_or(Error::NotAuthenticated)?;
-        Ok(self.request(method, path).bearer_auth(&token.access_token))
+        Ok(self
+            .http
+            .request(method, format!("{}{path}", self.api_url))
+            .header("trakt-api-key", &self.client_id)
+            .bearer_auth(&token.access_token))
     }
 }
 
@@ -178,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn authed_calls_require_a_token() {
-        let client = TraktClient::new("id", "secret");
+        let client = TraktClient::new("id");
         assert!(matches!(
             client.watched_shows().await,
             Err(Error::NotAuthenticated)

@@ -118,3 +118,154 @@ button {
   background: #2c2c2c;
   font-weight: 600;
 }
+
+.center {
+  margin-top: 40vh;
+  padding: 0 24px;
+  text-align: center;
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+/* ---- sign in ---- */
+
+.signin {
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+}
+
+.brand {
+  margin: 0 0 8px;
+  font-size: 2.25rem;
+  font-weight: 800;
+}
+
+.user-code {
+  margin: 0;
+  font-family: ui-monospace, "Roboto Mono", monospace;
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.secondary {
+  padding: 10px 20px;
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+}
+
+.ghost {
+  padding: 8px 4px;
+  color: var(--muted);
+}
+
+/* ---- progress ---- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+select {
+  padding: 8px 12px;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.section {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 24px 0 8px;
+  font-size: 1.1rem;
+}
+
+.count {
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #262626;
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+}
+
+.info p {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.show {
+  font-weight: 600;
+}
+
+.episode {
+  margin-top: 2px;
+  color: #d0d0d0;
+}
+
+.ep-code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  background: #2c2c2c;
+}
+
+.meta {
+  margin-top: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.bar {
+  height: 3px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: #2c2c2c;
+}
+
+.fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.check {
+  flex: none;
+  width: 56px;
+  height: 36px;
+  border: 1px solid var(--text);
+  border-radius: 999px;
+  font-size: 1.1rem;
+}
+
+.check:disabled {
+  opacity: 0.4;
+}
