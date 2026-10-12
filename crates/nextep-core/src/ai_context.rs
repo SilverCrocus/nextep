@@ -4,7 +4,8 @@
 //!
 //! It is all worked out before the request and sent in the prompt, so a pick
 //! is a single model call. History comes from data already on the device;
-//! favourite people are looked up on Trakt, all shows at once.
+//! favourite people are looked up on Trakt, all shows at once, and kept in a
+//! cache the caller holds between requests.
 
 use std::collections::{HashMap, HashSet};
 
@@ -102,13 +103,18 @@ impl TasteContext {
     }
 
     /// Everything the model gets to know about the user, for the prompt.
-    /// Favourite people need Trakt; if it fails they are left out.
-    pub async fn to_prompt_json(&self, client: &TraktClient) -> Value {
+    /// Favourite people come from `people` or Trakt; shows Trakt fails on are
+    /// left out.
+    pub async fn to_prompt_json(
+        &self,
+        client: &TraktClient,
+        people: &mut HashMap<u64, ShowPeople>,
+    ) -> Value {
         json!({
             "taste_profile": self.taste_profile(),
             "recent_shows": self.recent_shows(),
             "dropped_shows": self.dropped_shows(),
-            "favourite_people": self.favourite_people(client).await,
+            "favourite_people": self.favourite_people(client, people).await,
         })
     }
 
@@ -183,7 +189,11 @@ impl TasteContext {
         })
     }
 
-    async fn favourite_people(&self, client: &TraktClient) -> Value {
+    async fn favourite_people(
+        &self,
+        client: &TraktClient,
+        cache: &mut HashMap<u64, ShowPeople>,
+    ) -> Value {
         let liked: Vec<(u64, String)> = self
             .shows
             .iter()
@@ -191,18 +201,13 @@ impl TasteContext {
             .take(PEOPLE_SHOWS)
             .map(|s| (s.id, s.title.clone()))
             .collect();
-        // All at once: one after another adds a round trip per show.
-        let people: Vec<Option<ShowPeople>> =
-            futures::future::join_all(liked.iter().map(|(id, _)| client.show_people(*id)))
-                .await
-                .into_iter()
-                .map(|r| r.ok())
-                .collect();
+        let ids: Vec<u64> = liked.iter().map(|(id, _)| *id).collect();
+        fetch_people(client, &ids, cache).await;
 
         // person -> (roles, shows)
         let mut seen: HashMap<String, (HashSet<String>, Vec<String>)> = HashMap::new();
-        for ((_, title), people) in liked.iter().zip(&people) {
-            let Some(people) = people else {
+        for (id, title) in &liked {
+            let Some(people) = cache.get(id) else {
                 continue;
             };
             for (name, role) in key_people(people) {
@@ -230,6 +235,27 @@ impl TasteContext {
                 })
                 .collect::<Vec<_>>(),
         })
+    }
+}
+
+/// Looks up the people of the shows not in `cache` yet, all at once, and
+/// adds them. Shows that fail to load are left out and retried next time.
+pub async fn fetch_people(
+    client: &TraktClient,
+    show_ids: &[u64],
+    cache: &mut HashMap<u64, ShowPeople>,
+) {
+    let mut seen = HashSet::new();
+    let missing: Vec<u64> = show_ids
+        .iter()
+        .copied()
+        .filter(|id| !cache.contains_key(id) && seen.insert(*id))
+        .collect();
+    let found = futures::future::join_all(missing.iter().map(|&id| client.show_people(id))).await;
+    for (id, people) in missing.into_iter().zip(found) {
+        if let Ok(people) = people {
+            cache.insert(id, people);
+        }
     }
 }
 
@@ -386,7 +412,9 @@ mod tests {
     #[tokio::test]
     async fn prompt_json_has_everything_and_survives_trakt_failing() {
         // Not signed in, so the people lookups fail.
-        let all = context().to_prompt_json(&TraktClient::new("id")).await;
+        let all = context()
+            .to_prompt_json(&TraktClient::new("id"), &mut HashMap::new())
+            .await;
         assert_eq!(all["taste_profile"]["shows_watched"], 3);
         assert_eq!(all["recent_shows"].as_array().unwrap().len(), 3);
         assert_eq!(all["dropped_shows"][0]["title"], "Abandoned Reality");
@@ -394,6 +422,36 @@ mod tests {
             all["favourite_people"]["people_in_several_liked_shows"],
             json!([])
         );
+    }
+
+    #[tokio::test]
+    async fn favourite_people_reuses_people_from_earlier_requests() {
+        let cast = |names: &[&str]| ShowPeople {
+            cast: Some(
+                names
+                    .iter()
+                    .map(|n| CastMember {
+                        characters: vec![],
+                        episode_count: None,
+                        person: Person { name: (*n).into() },
+                    })
+                    .collect(),
+            ),
+            crew: None,
+        };
+        // Both liked shows are cached, so nothing is fetched from Trakt
+        // (which would fail: not signed in).
+        let mut cache = HashMap::from([
+            (1, cast(&["Shared Actor", "Only Old"])),
+            (2, cast(&["Shared Actor", "Only Recent"])),
+        ]);
+        let people = context()
+            .favourite_people(&TraktClient::new("id"), &mut cache)
+            .await;
+        let repeat = &people["people_in_several_liked_shows"];
+        assert_eq!(repeat.as_array().unwrap().len(), 1);
+        assert_eq!(repeat[0]["name"], "Shared Actor");
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]
