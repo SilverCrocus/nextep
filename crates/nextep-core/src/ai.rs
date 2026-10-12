@@ -20,7 +20,9 @@ use crate::{Error, Result};
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 pub const DEFAULT_MODEL: &str = "deepseek-flash";
 /// How hard thinking models think: DeepSeek takes `none`, `low`, `high`, `max`.
-pub const DEFAULT_REASONING_EFFORT: &str = "max";
+/// Low by default: every tool round thinks again, so higher effort multiplies
+/// the wait. Users can raise it in Settings.
+pub const DEFAULT_REASONING_EFFORT: &str = "low";
 const MAX_PICKS: usize = 10;
 /// Tool-call rounds before giving up.
 pub const MAX_ROUNDS: usize = 8;
@@ -223,7 +225,7 @@ fn base(config: &AiConfig) -> &str {
 
 fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
-        // Maximum thinking over a hundred candidates can take a while.
+        // High or max thinking over a hundred candidates can take a while.
         .timeout(Duration::from_secs(300))
         .build()?)
 }

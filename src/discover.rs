@@ -118,7 +118,7 @@ fn AskAi() -> impl IntoView {
     let picks = RwSignal::new(None::<Vec<AiPick>>);
     let error = RwSignal::new(None::<String>);
     let asking = RwSignal::new(false);
-    // Seconds spent thinking; maximum thinking can take a minute or more.
+    // Seconds spent thinking; max thinking can take a minute or more.
     let elapsed = RwSignal::new(0u32);
 
     // Re-check when settings change (e.g. a key was just saved).
