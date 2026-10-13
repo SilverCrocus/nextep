@@ -803,6 +803,12 @@ select {
   min-width: 0;
 }
 
+/* Not a grid item itself, so a card in a wrap must be told to fill the
+   column; otherwise it shrinks to the poster's natural size. */
+.card-wrap > .card {
+  width: 100%;
+}
+
 .remove {
   position: absolute;
   top: 6px;

@@ -227,12 +227,34 @@ impl TraktList {
     }
 }
 
-/// One show on a list (`GET /users/me/lists/{id}/items/show`).
+/// One entry of a list (`GET /users/me/lists/{id}/items/show,movie`): a
+/// show or a movie.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ListedShow {
+pub struct ListItem {
     #[serde(default)]
     pub listed_at: Option<DateTime<Utc>>,
-    pub show: Show,
+    #[serde(default)]
+    pub show: Option<Show>,
+    #[serde(default)]
+    pub movie: Option<Movie>,
+}
+
+impl ListItem {
+    pub fn id(&self) -> Option<ItemId> {
+        match (&self.show, &self.movie) {
+            (Some(show), _) => show.ids.trakt.map(ItemId::Show),
+            (None, Some(movie)) => movie.ids.trakt.map(ItemId::Movie),
+            (None, None) => None,
+        }
+    }
+}
+
+/// A show or a movie, by Trakt id. Their ids overlap, so the kind is part of
+/// the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ItemId {
+    Show(u64),
+    Movie(u64),
 }
 
 /// `GET /users/settings` (only the account limits).
@@ -374,6 +396,20 @@ mod tests {
             Some("mdblist")
         );
         assert_eq!(list("Shows to watch with Sam").managed_by(), None);
+    }
+
+    #[test]
+    fn list_items_are_shows_or_movies() {
+        let items: Vec<ListItem> = serde_json::from_str(
+            r#"[
+                {"type": "show", "listed_at": "2026-10-01T10:00:00.000Z", "show": {"title": "Dark", "year": 2017, "ids": {"trakt": 7}}},
+                {"type": "movie", "rank": 2, "movie": {"title": "Tenet", "year": 2020, "ids": {"trakt": 7}}},
+                {"type": "person", "person": {"name": "Someone"}}
+            ]"#,
+        )
+        .unwrap();
+        let ids: Vec<Option<ItemId>> = items.iter().map(ListItem::id).collect();
+        assert_eq!(ids, [Some(ItemId::Show(7)), Some(ItemId::Movie(7)), None]);
     }
 
     #[test]

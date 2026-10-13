@@ -8,7 +8,7 @@ use nextep_core::ai;
 use nextep_core::ai_context::TasteContext;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::ShowStatus;
-use nextep_core::models::{Episode, Movie, Show, TraktList};
+use nextep_core::models::{Episode, ItemId, ListItem, Movie, Show, TraktList};
 use nextep_core::progress::{
     self, ProgressItem, ProgressOptions, ProgressView, SortBy, title_sort_key,
 };
@@ -435,7 +435,10 @@ pub async fn history(
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Card {
-    show_id: u64,
+    /// Trakt id of the show, or of the movie when `movie` is set.
+    id: u64,
+    #[serde(default)]
+    movie: bool,
     title: String,
     poster: Option<String>,
     note: String,
@@ -481,7 +484,8 @@ pub async fn library(
         };
         let left = item.episodes_left();
         let card = |note: String| Card {
-            show_id,
+            id: show_id,
+            movie: false,
             title: item.show.display_title().to_owned(),
             poster: item.poster.clone(),
             note,
@@ -513,7 +517,8 @@ pub async fn library(
     let artwork = state.artwork.lock().await;
     for (show_id, status, show) in unwatched {
         let card = Card {
-            show_id,
+            id: show_id,
+            movie: false,
             title: show.display_title().to_owned(),
             poster: artwork.poster_url(show.ids.tmdb, Size::Thumb),
             note: "Not started".into(),
@@ -528,7 +533,8 @@ pub async fn library(
         .filter_map(|w| {
             let show_id = w.show.ids.trakt.filter(|id| !watched.contains(id))?;
             Some(Card {
-                show_id,
+                id: show_id,
+                movie: false,
                 title: w.show.display_title().to_owned(),
                 poster: artwork.poster_url(w.show.ids.tmdb, Size::Thumb),
                 note: w.show.year.map(|y| y.to_string()).unwrap_or_default(),
@@ -1238,7 +1244,8 @@ pub async fn lists(
 #[derive(Serialize)]
 pub struct ListDetail {
     list: ListSummary,
-    shows: Vec<Card>,
+    /// Shows and movies, in the list's order.
+    items: Vec<Card>,
 }
 
 #[tauri::command]
@@ -1249,29 +1256,41 @@ pub async fn list_detail(state: State<'_, AppState>, list_id: u64) -> Result<Lis
         .iter()
         .find(|l| l.ids.trakt == list_id)
         .ok_or("This list no longer exists.")?;
-    let shows = client.list_shows(list_id).await.map_err(to_ui_error)?;
+    let items = client.list_items(list_id).await.map_err(to_ui_error)?;
     state
-        .remember_list_members(
-            list_id,
-            shows.iter().filter_map(|s| s.show.ids.trakt).collect(),
-        )
+        .remember_list_members(list_id, items.iter().filter_map(ListItem::id).collect())
         .await;
-    state
-        .fetch_artwork(shows.iter().filter_map(|s| s.show.ids.tmdb))
-        .await;
+    let shows = || items.iter().filter_map(|i| i.show.as_ref());
+    let movies = || items.iter().filter_map(|i| i.movie.as_ref());
+    futures::join!(
+        state.fetch_artwork(shows().filter_map(|s| s.ids.tmdb)),
+        state.fetch_movie_artwork(movies().filter_map(|m| m.ids.tmdb)),
+    );
 
     let artwork = state.artwork.lock().await;
+    let year = |y: Option<i32>| y.map(|y| y.to_string()).unwrap_or_default();
     Ok(ListDetail {
         list: ListSummary::from(list),
-        shows: shows
-            .into_iter()
-            .filter_map(|s| {
-                Some(Card {
-                    show_id: s.show.ids.trakt?,
-                    title: s.show.display_title().to_owned(),
-                    poster: artwork.poster_url(s.show.ids.tmdb, Size::Thumb),
-                    note: s.show.year.map(|y| y.to_string()).unwrap_or_default(),
-                })
+        items: items
+            .iter()
+            .filter_map(|i| match (&i.show, &i.movie) {
+                (Some(s), _) => Some(Card {
+                    id: s.ids.trakt?,
+                    movie: false,
+                    title: s.display_title().to_owned(),
+                    poster: artwork.poster_url(s.ids.tmdb, Size::Thumb),
+                    note: year(s.year),
+                }),
+                (None, Some(m)) => Some(Card {
+                    id: m.ids.trakt?,
+                    movie: true,
+                    title: m.display_title().to_owned(),
+                    poster: artwork.poster(Media::Movie, m.ids.tmdb, Size::Thumb),
+                    note: format!("Movie · {}", year(m.year))
+                        .trim_end_matches(" · ")
+                        .to_owned(),
+                }),
+                (None, None) => None,
             })
             .collect(),
     })
@@ -1319,47 +1338,61 @@ pub async fn delete_list(state: State<'_, AppState>, list_id: u64) -> Result<(),
     Ok(())
 }
 
+fn item_id(id: u64, movie: Option<bool>) -> ItemId {
+    if movie.unwrap_or(false) {
+        ItemId::Movie(id)
+    } else {
+        ItemId::Show(id)
+    }
+}
+
+/// Adds a show (or, with `movie`, a movie) to a list or removes it.
 #[tauri::command]
 pub async fn set_in_list(
     state: State<'_, AppState>,
     list_id: u64,
-    show_id: u64,
+    id: u64,
+    movie: Option<bool>,
     on: bool,
 ) -> Result<(), String> {
+    let item = item_id(id, movie);
     let client = state.signed_in_client().await?;
     if on {
-        client.add_to_list(list_id, show_id).await
+        client.add_to_list(list_id, item).await
     } else {
-        client.remove_from_list(list_id, show_id).await
+        client.remove_from_list(list_id, item).await
     }
     .map_err(list_error)?;
-    state.update_list_member(list_id, show_id, on).await;
+    state.update_list_member(list_id, item, on).await;
     state.invalidate_lists().await;
     Ok(())
 }
 
 #[derive(Serialize)]
-pub struct ShowListEntry {
+pub struct ItemListEntry {
     id: u64,
     name: String,
     contains: bool,
 }
 
-/// The user's own (editable) lists, and whether each contains the show.
+/// The user's own (editable) lists, and whether each contains the show (or,
+/// with `movie`, the movie).
 #[tauri::command]
-pub async fn show_lists(
+pub async fn item_lists(
     state: State<'_, AppState>,
-    show_id: u64,
-) -> Result<Vec<ShowListEntry>, String> {
+    id: u64,
+    movie: Option<bool>,
+) -> Result<Vec<ItemListEntry>, String> {
+    let item = item_id(id, movie);
     let client = state.signed_in_client().await?;
     let lists = state.lists(&client, false).await?;
     let mut entries = Vec::new();
     for list in lists.iter().filter(|l| l.managed_by().is_none()) {
         let members = state.list_members(&client, list.ids.trakt).await?;
-        entries.push(ShowListEntry {
+        entries.push(ItemListEntry {
             id: list.ids.trakt,
             name: list.name.clone(),
-            contains: members.contains(&show_id),
+            contains: members.contains(&item),
         });
     }
     Ok(entries)
@@ -1370,7 +1403,7 @@ pub async fn show_lists(
 fn list_error(e: Error) -> String {
     match e {
         Error::Api { status: 420, .. } => {
-            "Trakt's limit for your account is reached (free accounts: 12 lists, 1,000 shows each)."
+            "Trakt's limit for your account is reached (free accounts: 12 lists, 1,000 items each)."
                 .into()
         }
         e => to_ui_error(e),

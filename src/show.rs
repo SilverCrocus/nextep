@@ -176,7 +176,7 @@ fn Details(
             <p class="meta">{meta}</p>
             {rating.map(|r| view! { <p class="rating">{r}</p> })}
 
-            <ListPicker show_id=show_id/>
+            <ListPicker id=show_id/>
             {if started {
                 view! {
                     <div class="segmented">

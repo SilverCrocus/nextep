@@ -98,19 +98,22 @@ pub async fn create_list(name: &str) -> Result<ListSummary, String> {
     call("create_list", Args { name }).await
 }
 
-pub async fn set_in_list(list_id: u64, show_id: u64, on: bool) -> Result<(), String> {
+/// Adds a show (or, with `movie`, a movie) to a list or removes it.
+pub async fn set_in_list(list_id: u64, id: u64, movie: bool, on: bool) -> Result<(), String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Args {
         list_id: u64,
-        show_id: u64,
+        id: u64,
+        movie: bool,
         on: bool,
     }
     call(
         "set_in_list",
         Args {
             list_id,
-            show_id,
+            id,
+            movie,
             on,
         },
     )
@@ -313,11 +316,11 @@ pub struct ListsView {
 #[derive(Clone, Deserialize)]
 pub struct ListDetail {
     pub list: ListSummary,
-    pub shows: Vec<Card>,
+    pub items: Vec<Card>,
 }
 
 #[derive(Clone, Deserialize)]
-pub struct ShowListEntry {
+pub struct ItemListEntry {
     pub id: u64,
     pub name: String,
     pub contains: bool,
@@ -339,7 +342,10 @@ pub struct Provider {
 
 #[derive(Clone, Deserialize)]
 pub struct Card {
-    pub show_id: u64,
+    /// Show id, or movie id for movies.
+    pub id: u64,
+    #[serde(default)]
+    pub movie: bool,
     pub title: String,
     pub poster: Option<String>,
     pub note: String,

@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::api::{self, MovieCard, MovieDetails, MoviesView};
 use crate::app::{PagePreview, Poster, Preview, nav};
+use crate::lists::ListPicker;
 use crate::show::capitalize;
 
 /// Loads the movie lists (saved copy first, then fresh) and reloads on
@@ -326,6 +327,7 @@ pub fn MoviePage(movie_id: u64) -> impl IntoView {
                                     {if d.on_watchlist { "✓ On your watchlist" } else { "+ Watchlist" }}
                                 </button>
                             </div>
+                            <ListPicker id=movie_id movie=true/>
                             {movie.overview.clone().map(|o| view! { <p class="overview">{o}</p> })}
                             {(!d.streaming.is_empty())
                                 .then(|| {

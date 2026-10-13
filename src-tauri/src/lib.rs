@@ -57,7 +57,7 @@ pub fn run() {
             commands::rename_list,
             commands::delete_list,
             commands::set_in_list,
-            commands::show_lists,
+            commands::item_lists,
             commands::library,
             commands::show_details,
             commands::search,

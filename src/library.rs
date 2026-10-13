@@ -153,10 +153,17 @@ pub fn Library() -> impl IntoView {
 #[component]
 fn CardView(card: Card) -> impl IntoView {
     let nav = nav();
-    let show_id = card.show_id;
+    let (id, movie) = (card.id, card.movie);
     let preview = Preview::new(&card.title, &card.poster);
+    let open = move |_| {
+        if movie {
+            nav.open_movie(id, preview.clone())
+        } else {
+            nav.open_show(id, preview.clone())
+        }
+    };
     view! {
-        <button class="card" on:click=move |_| nav.open_show(show_id, preview.clone())>
+        <button class="card" on:click=open>
             <Poster src=card.poster/>
             <span class="card-title">{card.title}</span>
             <span class="card-note">{card.note}</span>

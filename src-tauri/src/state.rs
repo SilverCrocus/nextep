@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use nextep_core::ai::AiConfig;
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::{Labels, ShowStatus};
-use nextep_core::models::{Movie, Show, ShowPeople, TraktList, WatchedMovie, WatchlistMovie};
+use nextep_core::models::{
+    ItemId, ListItem, Movie, Show, ShowPeople, TraktList, WatchedMovie, WatchlistMovie,
+};
 use nextep_core::progress::ProgressItem;
 use nextep_core::sync::{self, ProgressCache};
 use nextep_core::tmdb::{ArtworkCache, Media, Size, TmdbClient};
@@ -63,7 +65,7 @@ pub struct AppState {
     watchlist: Mutex<Option<(DateTime<Utc>, HashSet<u64>)>>,
     /// Personal lists, and the shows on each list once loaded.
     lists: Mutex<Option<(DateTime<Utc>, Vec<TraktList>)>>,
-    list_members: Mutex<HashMap<u64, HashSet<u64>>>,
+    list_members: Mutex<HashMap<u64, HashSet<ItemId>>>,
     ai: Mutex<Option<AiConfig>>,
     /// Watched movies and the movie watchlist, from the latest fetch.
     movies: Mutex<Option<(DateTime<Utc>, MovieData)>>,
@@ -312,26 +314,26 @@ impl AppState {
         &self,
         client: &TraktClient,
         list_id: u64,
-    ) -> Result<HashSet<u64>, String> {
+    ) -> Result<HashSet<ItemId>, String> {
         if let Some(ids) = self.list_members.lock().await.get(&list_id) {
             return Ok(ids.clone());
         }
-        let shows = client.list_shows(list_id).await.map_err(to_ui_error)?;
-        let ids: HashSet<u64> = shows.iter().filter_map(|s| s.show.ids.trakt).collect();
+        let items = client.list_items(list_id).await.map_err(to_ui_error)?;
+        let ids: HashSet<ItemId> = items.iter().filter_map(ListItem::id).collect();
         self.remember_list_members(list_id, ids.clone()).await;
         Ok(ids)
     }
 
-    pub async fn remember_list_members(&self, list_id: u64, ids: HashSet<u64>) {
+    pub async fn remember_list_members(&self, list_id: u64, ids: HashSet<ItemId>) {
         self.list_members.lock().await.insert(list_id, ids);
     }
 
-    pub async fn update_list_member(&self, list_id: u64, show_id: u64, on: bool) {
+    pub async fn update_list_member(&self, list_id: u64, item: ItemId, on: bool) {
         if let Some(ids) = self.list_members.lock().await.get_mut(&list_id) {
             if on {
-                ids.insert(show_id);
+                ids.insert(item);
             } else {
-                ids.remove(&show_id);
+                ids.remove(&item);
             }
         }
     }

@@ -1,11 +1,12 @@
 //! Personal Trakt lists: browse, create, rename, delete, and add or remove
-//! shows. Lists that couchmoney or mdblist regenerate are browse-only.
+//! shows and movies. Lists that couchmoney or mdblist regenerate are
+//! browse-only.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
 
-use crate::api::{self, ListDetail, ListSummary, ListsView, ShowListEntry};
+use crate::api::{self, ItemListEntry, ListDetail, ListSummary, ListsView};
 use crate::app::{Poster, Preview, nav};
 
 /// The Lists group in Library.
@@ -212,15 +213,15 @@ pub fn ListPage(list_id: u64) -> impl IntoView {
         });
     });
 
-    let remove = Callback::new(move |show_id: u64| {
+    let remove = Callback::new(move |(id, movie): (u64, bool)| {
         // Drop it from the page right away; Trakt catches up in the background.
         data.update(|d| {
             if let Some(d) = d {
-                d.shows.retain(|c| c.show_id != show_id);
+                d.items.retain(|c| (c.id, c.movie) != (id, movie));
             }
         });
         spawn_local(async move {
-            match api::set_in_list(list_id, show_id, false).await {
+            match api::set_in_list(list_id, id, movie, false).await {
                 Ok(()) => nav.data_changed(),
                 Err(e) => {
                     error.set(Some(e));
@@ -245,31 +246,38 @@ pub fn ListPage(list_id: u64) -> impl IntoView {
                             <h1 class="show-title">{d.list.name.clone()}</h1>
                             <p class="meta">
                                 {match &d.list.managed_by {
-                                    Some(by) => format!("{} · kept up to date by {by}", count_label(d.shows.len() as u32)),
-                                    None => count_label(d.shows.len() as u32),
+                                    Some(by) => format!("{} · kept up to date by {by}", count_label(d.items.len() as u32)),
+                                    None => count_label(d.items.len() as u32),
                                 }}
                             </p>
                             {own.then(|| view! { <ListActions list=d.list.clone() editing on_renamed/> })}
-                            {d.shows.is_empty().then(|| {
+                            {d.items.is_empty().then(|| {
                                 view! {
                                     <p class="hint">
                                         {if own {
-                                            "Add shows from their page with “Add to list”."
+                                            "Add shows and movies from their page with “Add to list”."
                                         } else {
-                                            "No shows on this list (it may only have movies)."
+                                            "Nothing on this list yet."
                                         }}
                                     </p>
                                 }
                             })}
                             <div class="grid">
-                                {d.shows
+                                {d.items
                                     .into_iter()
                                     .map(|card| {
-                                        let show_id = card.show_id;
+                                        let (id, movie) = (card.id, card.movie);
                                         let preview = Preview::new(&card.title, &card.poster);
+                                        let open = move |_| {
+                                            if movie {
+                                                nav.open_movie(id, preview.clone())
+                                            } else {
+                                                nav.open_show(id, preview.clone())
+                                            }
+                                        };
                                         view! {
                                             <div class="card-wrap">
-                                                <button class="card" on:click=move |_| nav.open_show(show_id, preview.clone())>
+                                                <button class="card" on:click=open>
                                                     <Poster src=card.poster/>
                                                     <span class="card-title">{card.title}</span>
                                                     <span class="card-note">{card.note}</span>
@@ -281,7 +289,7 @@ pub fn ListPage(list_id: u64) -> impl IntoView {
                                                                 <button
                                                                     class="remove"
                                                                     aria-label="Remove from list"
-                                                                    on:click=move |_| remove.run(show_id)
+                                                                    on:click=move |_| remove.run((id, movie))
                                                                 >
                                                                     "✕"
                                                                 </button>
@@ -404,23 +412,24 @@ fn ListActions(
     }
 }
 
-/// "Add to list" on a show page: the user's lists with a tick for each one
-/// containing the show, plus a quick "new list".
+/// "Add to list" on a show or movie page: the user's lists with a tick for
+/// each one containing it, plus a quick "new list". `id` is the show's, or
+/// with `movie` the movie's.
 #[component]
-pub fn ListPicker(show_id: u64) -> impl IntoView {
+pub fn ListPicker(id: u64, #[prop(optional)] movie: bool) -> impl IntoView {
     let nav = nav();
     let open = RwSignal::new(false);
-    let entries = RwSignal::new(None::<Vec<ShowListEntry>>);
+    let entries = RwSignal::new(None::<Vec<ItemListEntry>>);
     let error = RwSignal::new(None::<String>);
 
     let load = move || {
         #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
         struct Args {
-            show_id: u64,
+            id: u64,
+            movie: bool,
         }
         spawn_local(async move {
-            match api::call::<Vec<ShowListEntry>>("show_lists", Args { show_id }).await {
+            match api::call::<Vec<ItemListEntry>>("item_lists", Args { id, movie }).await {
                 Ok(v) => entries.set(Some(v)),
                 Err(e) => nav.report(e, error),
             }
@@ -435,7 +444,7 @@ pub fn ListPicker(show_id: u64) -> impl IntoView {
             }
         });
         spawn_local(async move {
-            match api::set_in_list(list_id, show_id, on).await {
+            match api::set_in_list(list_id, id, movie, on).await {
                 Ok(()) => nav.data_changed(),
                 Err(e) => {
                     error.set(Some(e));
@@ -447,7 +456,7 @@ pub fn ListPicker(show_id: u64) -> impl IntoView {
     let on_created = Callback::new(move |list: ListSummary| {
         entries.update(|l| {
             if let Some(l) = l {
-                l.push(ShowListEntry {
+                l.push(ItemListEntry {
                     id: list.id,
                     name: list.name.clone(),
                     contains: false,
@@ -504,7 +513,7 @@ pub fn ListPicker(show_id: u64) -> impl IntoView {
 
 fn count_label(n: u32) -> String {
     match n {
-        1 => "1 show".into(),
-        n => format!("{n} shows"),
+        1 => "1 title".into(),
+        n => format!("{n} titles"),
     }
 }

@@ -17,9 +17,10 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::models::{
-    CalendarEntry, CalendarMovie, HiddenShow, HistoryEntry, ListedShow, Movie, MovieSearchResult,
-    SearchResult, Season, Show, ShowPeople, ShowProgress, TraktList, TrendingMovie, TrendingShow,
-    UserSettings, UserStats, WatchedMovie, WatchedShow, WatchlistMovie, WatchlistShow,
+    CalendarEntry, CalendarMovie, HiddenShow, HistoryEntry, ItemId, ListItem, Movie,
+    MovieSearchResult, SearchResult, Season, Show, ShowPeople, ShowProgress, TraktList,
+    TrendingMovie, TrendingShow, UserSettings, UserStats, WatchedMovie, WatchedShow,
+    WatchlistMovie, WatchlistShow,
 };
 use crate::{Error, Result};
 
@@ -311,19 +312,20 @@ impl TraktClient {
         self.write(Method::DELETE, &path, None).await.map(drop)
     }
 
-    pub async fn list_shows(&self, list_id: u64) -> Result<Vec<ListedShow>> {
-        let path = format!("/users/me/lists/{list_id}/items/show?extended=full&limit=all");
+    /// The shows and movies on a list.
+    pub async fn list_items(&self, list_id: u64) -> Result<Vec<ListItem>> {
+        let path = format!("/users/me/lists/{list_id}/items/show,movie?extended=full&limit=all");
         send_json(self.authed(Method::GET, &path)?).await
     }
 
-    pub async fn add_to_list(&self, list_id: u64, show_trakt_id: u64) -> Result<()> {
+    pub async fn add_to_list(&self, list_id: u64, item: ItemId) -> Result<()> {
         let path = format!("/users/me/lists/{list_id}/items");
-        self.post(&path, shows_body(show_trakt_id)).await
+        self.post(&path, item_body(item)).await
     }
 
-    pub async fn remove_from_list(&self, list_id: u64, show_trakt_id: u64) -> Result<()> {
+    pub async fn remove_from_list(&self, list_id: u64, item: ItemId) -> Result<()> {
         let path = format!("/users/me/lists/{list_id}/items/remove");
-        self.post(&path, shows_body(show_trakt_id)).await
+        self.post(&path, item_body(item)).await
     }
 
     /// How many personal lists the account may have (12 on free accounts).
@@ -459,6 +461,13 @@ fn movies_body(movie_trakt_id: u64) -> serde_json::Value {
 
 fn shows_body(show_trakt_id: u64) -> serde_json::Value {
     json!({ "shows": [{ "ids": { "trakt": show_trakt_id } }] })
+}
+
+fn item_body(item: ItemId) -> serde_json::Value {
+    match item {
+        ItemId::Show(id) => shows_body(id),
+        ItemId::Movie(id) => movies_body(id),
+    }
 }
 
 #[cfg(test)]

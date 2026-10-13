@@ -26,7 +26,7 @@ what gets used daily stays, the rest is cut or deferred.
 ## Next
 
 - [x] **Lists** on top of Trakt lists (they sync to Stremio's Trakt add-on):
-      create, rename, delete, add and remove shows; couchmoney / mdblist
+      create, rename, delete, add and remove shows and movies; couchmoney / mdblist
       lists shown read-only as recommendations; "5 of 12 lists" counter
 - [ ] **Discovery** page (Discover tab)
   - [x] "Because you watched …" rows (Trakt related shows for the last three)
@@ -54,7 +54,6 @@ what gets used daily stays, the rest is cut or deferred.
       and Library (watched / watchlist), movie pages (mark watched,
       watchlist, where to watch, director and cast), movies in Search, and
       watchlist releases in Calendar
-- [ ] Movies in Lists
 - [ ] New-episode notifications
 - [ ] Home-screen widget
 
