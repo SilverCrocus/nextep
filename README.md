@@ -44,7 +44,7 @@ no server in between, and no ads or tracking.
   </tr>
 </table>
 
-> **Status:** young (v0.8) but used every day. Not on Google Play or F-Droid;
+> **Status:** young but used every day. Not on Google Play or F-Droid;
 > releases are signed APKs on GitHub. See [docs/ROADMAP.md](docs/ROADMAP.md)
 > for what's done, what's next, and what was left out on purpose.
 
