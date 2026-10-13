@@ -20,7 +20,7 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 members = ["src-tauri", "crates/nextep-core"]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/SilverCrocus/nextep"
