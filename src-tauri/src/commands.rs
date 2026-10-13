@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::notify;
 use crate::state::{AppState, Feeds, NOT_SIGNED_IN, to_ui_error};
 use crate::{TMDB_API_KEY, TRAKT_CLIENT_ID};
+use crate::{notify, widget};
 
 // ---- status & sign-in -------------------------------------------------------
 
@@ -92,8 +92,9 @@ pub async fn sign_in_poll(
 #[tauri::command]
 pub async fn sign_out(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.sign_out().await;
-    // Nothing to alert about any more.
+    // Nothing to alert about or show any more.
     notify::reschedule(&app).await;
+    widget::update(&app, &ProgressView::default()).await;
     Ok(())
 }
 
@@ -133,21 +134,30 @@ pub async fn progress(
     force: Option<bool>,
     cached: Option<bool>,
 ) -> Result<ProgressView, String> {
-    let mut items: Vec<ProgressItem> = if cached.unwrap_or(false) {
+    let cached = cached.unwrap_or(false);
+    let mut items: Vec<ProgressItem> = if cached {
         state.snapshot("items")?
     } else {
-        let items = state.items(force.unwrap_or(false)).await?;
-        // Keep new-episode alerts in step with what was just fetched.
-        tauri::async_runtime::spawn(async move { notify::reschedule(&app).await });
-        items
+        state.items(force.unwrap_or(false)).await?
     };
     let labels = state.labels.lock().await;
     items.retain(|i| !labels.is_hidden(i.show.ids.trakt));
+    drop(labels);
     let opts = ProgressOptions {
         sort: sort.unwrap_or_default(),
         ..Default::default()
     };
-    Ok(progress::arrange(items, &opts, Utc::now()))
+    let view = progress::arrange(items, &opts, Utc::now());
+    if !cached {
+        // Keep new-episode alerts and the home-screen widget in step with
+        // what was just fetched.
+        let shown = view.clone();
+        tauri::async_runtime::spawn(async move {
+            notify::reschedule(&app).await;
+            widget::update(&app, &shown).await;
+        });
+    }
+    Ok(view)
 }
 
 #[tauri::command]

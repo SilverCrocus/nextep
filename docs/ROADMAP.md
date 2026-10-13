@@ -68,7 +68,9 @@ what gets used daily stays, the rest is cut or deferred.
       since, totals (shows, episodes, movies, time), Settings, sign out
 - [x] Marking a movie, or an episode of a show, watched takes it off the
       watchlist
-- [ ] Home-screen widget
+- [x] Home-screen widget: "Up next", the next four episodes (watchable
+      now first, then upcoming); updated whenever Progress refreshes,
+      tap to open Nextep
 
 ## Done from "Later"
 

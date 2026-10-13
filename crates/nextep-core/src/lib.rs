@@ -14,6 +14,7 @@ pub mod taste;
 pub mod tmdb;
 pub mod trakt;
 pub mod update;
+pub mod widget;
 
 pub use chrono;
 pub use trakt::TraktClient;

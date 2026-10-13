@@ -1,4 +1,7 @@
 <resources>
     <string name="app_name">"Nextep"</string>
     <string name="main_activity_title">"Nextep"</string>
+    <string name="widget_title">UP NEXT</string>
+    <string name="widget_description">Your next episodes</string>
+    <string name="widget_empty">Open Nextep to see your next episodes.</string>
 </resources>

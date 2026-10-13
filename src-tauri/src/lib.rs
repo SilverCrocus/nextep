@@ -3,6 +3,7 @@ mod installer;
 mod movies;
 mod notify;
 mod state;
+mod widget;
 
 use std::fs;
 
@@ -19,6 +20,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(installer::init())
+        .plugin(widget::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             fs::create_dir_all(&dir)?;

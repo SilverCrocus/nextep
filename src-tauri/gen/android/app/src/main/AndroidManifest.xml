@@ -29,6 +29,18 @@
             </intent-filter>
         </activity>
 
+        <!-- "Up next" home-screen widget. -->
+        <receiver
+          android:name=".NextepWidget"
+          android:exported="false">
+          <intent-filter>
+            <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+          </intent-filter>
+          <meta-data
+            android:name="android.appwidget.provider"
+            android:resource="@xml/nextep_widget_info" />
+        </receiver>
+
         <!-- Result of an update install: shows Android's confirmation when needed. -->
         <receiver
           android:name=".UpdateStatusReceiver"

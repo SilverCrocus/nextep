@@ -127,6 +127,9 @@ parts that get used every day and drops the rest.
 - **Profile**: your Trakt avatar, name and totals (shows, episodes, movies,
   time watched), with Settings and sign-out. It's the person icon at the top
   right of every tab.
+- **Home-screen widget**: *Up next* shows your next four episodes (what you
+  can watch now first, then what's airing soon) and opens Nextep when
+  tapped. It's updated whenever Progress refreshes.
 - **Marking something watched** takes it off your watchlist.
 - **Works offline**: the last good result of each screen is saved on the
   phone.
