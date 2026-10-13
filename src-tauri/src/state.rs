@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use nextep_core::ai::AiConfig;
 use nextep_core::alerts::{self, Alert};
@@ -41,18 +42,56 @@ const REUSE_SECS: i64 = 120;
 /// picks reuse them for this long unless Discover is refreshed.
 const FEEDS_REUSE_SECS: i64 = 30 * 60;
 
-/// Candidate shows and movies from Trakt for Discover and AI picks. `None`
+/// Candidate shows (or movies) from Trakt for Discover and AI picks. `None`
 /// and missing entries haven't been fetched (or failed) yet.
-#[derive(Clone, Default)]
-pub struct Feeds {
-    pub recommended: Option<Vec<Show>>,
-    pub trending: Option<Vec<Show>>,
-    /// Shows related to a watched show, by its Trakt id.
-    pub related: HashMap<u64, Vec<Show>>,
-    pub recommended_movies: Option<Vec<Movie>>,
-    pub trending_movies: Option<Vec<Movie>>,
-    /// Movies related to a watched movie, by its Trakt id.
-    pub related_movies: HashMap<u64, Vec<Movie>>,
+#[derive(Clone)]
+pub struct Feeds<T> {
+    pub recommended: Option<Vec<T>>,
+    pub trending: Option<Vec<T>>,
+    /// Related to a watched show (or movie), by its Trakt id.
+    pub related: HashMap<u64, Vec<T>>,
+}
+
+impl<T> Default for Feeds<T> {
+    fn default() -> Self {
+        Self {
+            recommended: None,
+            trending: None,
+            related: HashMap::new(),
+        }
+    }
+}
+
+impl<T: Clone> Feeds<T> {
+    /// Adds what `other` has that this doesn't.
+    pub fn merge_from(&mut self, other: &Feeds<T>) {
+        self.merge(other.clone());
+    }
+}
+
+impl<T> Feeds<T> {
+    /// Adds what `other` has that this doesn't.
+    fn merge(&mut self, other: Feeds<T>) {
+        if self.recommended.is_none() {
+            self.recommended = other.recommended;
+        }
+        if self.trending.is_none() {
+            self.trending = other.trending;
+        }
+        for (id, items) in other.related {
+            self.related.entry(id).or_insert(items);
+        }
+    }
+}
+
+/// Feeds kept in [`AppState`], with when they were first fetched.
+type FeedSlot<T> = Mutex<Option<(DateTime<Utc>, Feeds<T>)>>;
+
+/// Which fetch of the feeds a caller started from, to hand back to
+/// [`AppState::remember_show_feeds`] / [`AppState::remember_movie_feeds`].
+pub struct FeedsTicket {
+    account: u64,
+    at: DateTime<Utc>,
 }
 
 pub struct AppState {
@@ -72,7 +111,13 @@ pub struct AppState {
     ai: Mutex<Option<AiConfig>>,
     /// Watched movies and the movie watchlist, from the latest fetch.
     movies: Mutex<Option<(DateTime<Utc>, MovieData)>>,
-    feeds: Mutex<Option<(DateTime<Utc>, Feeds)>>,
+    show_feeds: FeedSlot<Show>,
+    movie_feeds: FeedSlot<Movie>,
+    /// Bumped on sign-out, so fetches that started before it are dropped.
+    account: AtomicU64,
+    /// Bumped whenever the items are invalidated, so a refresh that started
+    /// before a change can't store what it fetched.
+    items_generation: AtomicU64,
     /// Cast and crew of shows, kept between AI picks requests.
     pub people: Mutex<HashMap<u64, ShowPeople>>,
     /// Followed shows' episodes from the latest refresh.
@@ -107,7 +152,10 @@ impl AppState {
             list_members: Mutex::new(HashMap::new()),
             ai: Mutex::new(read(&dir, AI_FILE)),
             movies: Mutex::new(None),
-            feeds: Mutex::new(None),
+            show_feeds: Mutex::new(None),
+            movie_feeds: Mutex::new(None),
+            account: AtomicU64::new(0),
+            items_generation: AtomicU64::new(0),
             people: Mutex::new(HashMap::new()),
             calendar: Mutex::new(Vec::new()),
             alerts: Mutex::new(read(&dir, ALERTS_FILE).unwrap_or_default()),
@@ -174,7 +222,10 @@ impl AppState {
         *self.lists.lock().await = None;
         self.list_members.lock().await.clear();
         *self.movies.lock().await = None;
-        *self.feeds.lock().await = None;
+        self.account.fetch_add(1, Ordering::SeqCst);
+        self.items_generation.fetch_add(1, Ordering::SeqCst);
+        *self.show_feeds.lock().await = None;
+        *self.movie_feeds.lock().await = None;
         self.people.lock().await.clear();
         self.calendar.lock().await.clear();
         for name in [TOKEN_FILE, PROGRESS_FILE, LABELS_FILE] {
@@ -232,6 +283,7 @@ impl AppState {
 
         let client = self.signed_in_client().await?;
         let now = Utc::now();
+        let generation = self.items_generation.load(Ordering::SeqCst);
         let mut items = {
             let mut cache = self.progress.lock().await;
             let (items, calendar) = sync::refresh_progress(&client, &mut cache, now, force)
@@ -268,8 +320,12 @@ impl AppState {
         }
         drop(artwork);
 
-        self.save_snapshot("items", &items);
-        *self.items.lock().await = Some((now, items.clone()));
+        // An episode marked (or a sign-out) while this ran makes it out of
+        // date: return it to this caller, but don't keep it for others.
+        if self.items_generation.load(Ordering::SeqCst) == generation {
+            self.save_snapshot("items", &items);
+            *self.items.lock().await = Some((now, items.clone()));
+        }
         Ok(items)
     }
 
@@ -373,21 +429,58 @@ impl AppState {
         Ok(data)
     }
 
-    /// The Trakt feeds fetched in the last half hour, with when they were
-    /// first fetched; empty if `force` is set or they are older.
-    pub async fn feeds(&self, force: bool) -> (DateTime<Utc>, Feeds) {
-        match &*self.feeds.lock().await {
+    /// The show feeds fetched in the last half hour; empty if `force` is set
+    /// or they are older. Pass the ticket back with what was fetched.
+    pub async fn show_feeds(&self, force: bool) -> (FeedsTicket, Feeds<Show>) {
+        self.cached_feeds(&self.show_feeds, force).await
+    }
+
+    pub async fn remember_show_feeds(&self, ticket: FeedsTicket, feeds: Feeds<Show>) {
+        self.remember_feeds(&self.show_feeds, ticket, feeds).await;
+    }
+
+    /// [`Self::show_feeds`] for movies.
+    pub async fn movie_feeds(&self, force: bool) -> (FeedsTicket, Feeds<Movie>) {
+        self.cached_feeds(&self.movie_feeds, force).await
+    }
+
+    pub async fn remember_movie_feeds(&self, ticket: FeedsTicket, feeds: Feeds<Movie>) {
+        self.remember_feeds(&self.movie_feeds, ticket, feeds).await;
+    }
+
+    async fn cached_feeds<T: Clone>(
+        &self,
+        slot: &FeedSlot<T>,
+        force: bool,
+    ) -> (FeedsTicket, Feeds<T>) {
+        let account = self.account.load(Ordering::SeqCst);
+        let mut slot = slot.lock().await;
+        match &*slot {
             Some((at, feeds))
                 if !force && Utc::now() - *at < Duration::seconds(FEEDS_REUSE_SECS) =>
             {
-                (*at, feeds.clone())
+                (FeedsTicket { account, at: *at }, feeds.clone())
             }
-            _ => (Utc::now(), Feeds::default()),
+            _ => {
+                // Start afresh; later fetches from this one merge in.
+                let at = Utc::now();
+                *slot = Some((at, Feeds::default()));
+                (FeedsTicket { account, at }, Feeds::default())
+            }
         }
     }
 
-    pub async fn remember_feeds(&self, at: DateTime<Utc>, feeds: Feeds) {
-        *self.feeds.lock().await = Some((at, feeds));
+    /// Merges what a fetch found into the kept feeds, unless they were reset
+    /// (pull to refresh, sign-out) since it started.
+    async fn remember_feeds<T>(&self, slot: &FeedSlot<T>, ticket: FeedsTicket, feeds: Feeds<T>) {
+        if self.account.load(Ordering::SeqCst) != ticket.account {
+            return;
+        }
+        if let Some((at, kept)) = &mut *slot.lock().await
+            && *at == ticket.at
+        {
+            kept.merge(feeds);
+        }
     }
 
     pub async fn invalidate_movies(&self) {
@@ -406,6 +499,7 @@ impl AppState {
 
     /// Forces the next [`Self::items`] call to ask Trakt again.
     pub async fn invalidate(&self) {
+        self.items_generation.fetch_add(1, Ordering::SeqCst);
         *self.items.lock().await = None;
     }
 
@@ -444,8 +538,8 @@ impl AppState {
     }
 
     /// Makes the next refresh fetch this show's progress from Trakt.
-    pub async fn forget_progress(&self, show_id: u64) {
-        self.progress.lock().await.forget(show_id);
+    pub async fn mark_progress_stale(&self, show_id: u64) {
+        self.progress.lock().await.mark_stale(show_id);
     }
 
     /// Looks up posters for shows that don't have one cached yet.

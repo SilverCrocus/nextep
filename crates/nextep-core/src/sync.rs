@@ -17,8 +17,13 @@ use crate::{Error, Result, TraktClient};
 const CONCURRENCY: usize = 6;
 /// Refetch every show at least this often, in case something was missed.
 const MAX_AGE_DAYS: i64 = 7;
-/// Pull to refresh refetches every show watched this recently.
+/// Pull to refresh refetches every show watched this recently...
 const FORCE_DAYS: i64 = 30;
+/// ...unless it was fetched this recently.
+const FORCE_COOLDOWN_MINUTES: i64 = 5;
+/// Progress fetched this soon after a change on Trakt isn't trusted (Trakt
+/// can still answer from before it); it's fetched again after.
+const SETTLE_MINUTES: i64 = 10;
 /// Calendar window: the past week catches newly aired episodes, the rest
 /// fills the Upcoming section.
 const CALENDAR_PAST_DAYS: i64 = 7;
@@ -36,9 +41,12 @@ impl ProgressCache {
         self.shows.keys().copied()
     }
 
-    /// Drops a show so the next refresh fetches its progress again.
-    pub fn forget(&mut self, show_id: u64) {
-        self.shows.remove(&show_id);
+    /// Makes the next refresh fetch a show's progress again. The old progress
+    /// stays until then, so the show doesn't vanish if that fetch fails.
+    pub fn mark_stale(&mut self, show_id: u64) {
+        if let Some(entry) = self.shows.get_mut(&show_id) {
+            entry.plays = None;
+        }
     }
 }
 
@@ -140,22 +148,32 @@ fn needs_fetch(
     });
     // Right after episodes are marked, Trakt's watched list can already have
     // them while the progress call still answers from before, which left a
-    // show stuck a few episodes behind. Fetch again while the progress lags
-    // the watched list, for a day after the watch: progress leaves out
+    // show stuck a few episodes behind. So progress fetched within minutes of
+    // the change is fetched again later...
+    let settling = watched
+        .last_updated_at
+        .is_some_and(|at| cached.fetched_at - at < Duration::minutes(SETTLE_MINUTES));
+    // ...and progress that ends before the watched list's last watch is
+    // fetched again, for a day after that watch: progress leaves out
     // specials, so a special watched last never catches up.
     let lagging = cached.progress.last_watched_at < watched.last_watched_at
         && watched
             .last_watched_at
             .is_some_and(|at| cached.fetched_at - at < Duration::days(1));
+    // Watched or changed in the last month (a watch dated in the past still
+    // changes `last_updated_at`).
     let recent = force
+        && now - cached.fetched_at > Duration::minutes(FORCE_COOLDOWN_MINUTES)
         && watched
-            .last_watched_at
+            .last_updated_at
+            .max(watched.last_watched_at)
             .is_some_and(|at| now - at < Duration::days(FORCE_DAYS));
     let entry_changed = cached.last_updated_at != watched.last_updated_at
         || cached.last_watched_at != watched.last_watched_at
         || cached.plays != Some(watched.plays);
     entry_changed
         || aired_since_fetch
+        || settling
         || lagging
         || recent
         || now - cached.fetched_at > Duration::days(MAX_AGE_DAYS)
@@ -307,12 +325,14 @@ mod tests {
         let watched_at = now() - Duration::hours(3);
         let w = WatchedShow {
             last_watched_at: Some(watched_at),
+            last_updated_at: Some(watched_at),
             ..watched(0)
         };
-        // Fetched just after the watch, but the progress still ends earlier.
+        // Fetched after the watch, but the progress still ends earlier.
         let mut stale = cached(0, 0);
+        stale.last_updated_at = w.last_updated_at;
         stale.last_watched_at = w.last_watched_at;
-        stale.fetched_at = watched_at + Duration::minutes(1);
+        stale.fetched_at = watched_at + Duration::minutes(30);
         stale.progress.last_watched_at = Some(watched_at - Duration::days(2));
         assert!(needs_fetch(Some(&stale), &w, &[], now(), false));
 
@@ -334,6 +354,36 @@ mod tests {
     }
 
     #[test]
+    fn fetches_again_when_fetched_right_after_a_change() {
+        let changed = now() - Duration::hours(1);
+        let w = WatchedShow {
+            last_updated_at: Some(changed),
+            ..watched(0)
+        };
+        let mut c = cached(0, 0);
+        c.last_updated_at = w.last_updated_at;
+        c.fetched_at = changed + Duration::minutes(2);
+        assert!(needs_fetch(Some(&c), &w, &[], now(), false));
+        c.fetched_at = changed + Duration::minutes(20);
+        assert!(!needs_fetch(Some(&c), &w, &[], now(), false));
+    }
+
+    #[test]
+    fn marked_stale_shows_are_fetched_but_kept() {
+        let mut cache = ProgressCache::default();
+        cache.shows.insert(1, cached(1, 3));
+        cache.mark_stale(1);
+        assert!(needs_fetch(
+            cache.shows.get(&1),
+            &watched(3),
+            &[],
+            now(),
+            false
+        ));
+        assert_eq!(cache.show_ids().count(), 1);
+    }
+
+    #[test]
     fn pull_to_refresh_refetches_recently_watched_shows() {
         let recent = WatchedShow {
             last_watched_at: Some(now() - Duration::days(3)),
@@ -344,6 +394,9 @@ mod tests {
         up_to_date.progress.last_watched_at = recent.last_watched_at;
         assert!(!needs_fetch(Some(&up_to_date), &recent, &[], now(), false));
         assert!(needs_fetch(Some(&up_to_date), &recent, &[], now(), true));
+        // Not again within a few minutes.
+        up_to_date.fetched_at = now() - Duration::minutes(1);
+        assert!(!needs_fetch(Some(&up_to_date), &recent, &[], now(), true));
 
         let old = WatchedShow {
             last_watched_at: Some(now() - Duration::days(90)),

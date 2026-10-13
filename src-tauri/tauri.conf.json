@@ -32,11 +32,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "notification": {
-      "icon": "ic_stat_nextep",
-      "iconColor": "#E8453C"
-    }
   }
 }

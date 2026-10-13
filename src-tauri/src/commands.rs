@@ -164,7 +164,7 @@ pub async fn mark_watched(
     // Fetch this show's progress again instead of waiting for Trakt's
     // watched list to say it changed.
     if let Some(show_id) = show_id {
-        state.forget_progress(show_id).await;
+        state.mark_progress_stale(show_id).await;
     }
     state.invalidate().await;
     Ok(())
@@ -442,7 +442,9 @@ pub async fn history(
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Card {
-    /// Trakt id of the show, or of the movie when `movie` is set.
+    /// Trakt id of the show, or of the movie when `movie` is set. Saved
+    /// copies from before movies were on lists call it `show_id`.
+    #[serde(alias = "show_id")]
     id: u64,
     #[serde(default)]
     movie: bool,
@@ -782,17 +784,12 @@ async fn gather(
             let related = recent
                 .iter()
                 .zip(&seeds)
-                .map(|(m, id)| {
-                    (
-                        m.display_title().to_owned(),
-                        suggest(feeds.related_movies.get(id)),
-                    )
-                })
+                .map(|(m, id)| (m.display_title().to_owned(), suggest(feeds.related.get(id))))
                 .collect::<Vec<_>>();
             (
-                suggest(feeds.recommended_movies.as_ref()),
+                suggest(feeds.recommended.as_ref()),
                 related,
-                suggest(feeds.trending_movies.as_ref()),
+                suggest(feeds.trending.as_ref()),
                 watched.iter().filter_map(|w| w.movie.ids.trakt).collect(),
             )
         }
@@ -837,8 +834,13 @@ async fn gather(
 
 /// Trakt's recommended and trending shows and the shows related to `seeds`,
 /// reusing a recent fetch and fetching only what's missing.
-async fn show_feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force: bool) -> Feeds {
-    let (at, mut feeds) = state.feeds(force).await;
+async fn show_feeds(
+    state: &AppState,
+    client: &TraktClient,
+    seeds: &[u64],
+    force: bool,
+) -> Feeds<Show> {
+    let (ticket, mut feeds) = state.show_feeds(force).await;
     let missing: Vec<u64> = seeds
         .iter()
         .copied()
@@ -859,56 +861,62 @@ async fn show_feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force
         },
         futures::future::join_all(missing.iter().map(|&id| client.related_shows(id, 20))),
     );
-    if recommended.is_some() {
-        feeds.recommended = recommended;
-    }
-    if let Some(trending) = trending {
-        feeds.trending = Some(trending.into_iter().map(|t| t.show).collect());
-    }
+    // Only what this call fetched goes back; the rest is already kept.
+    let mut fetched = Feeds {
+        recommended,
+        trending: trending.map(|t| t.into_iter().map(|t| t.show).collect()),
+        related: HashMap::new(),
+    };
     for (id, shows) in missing.into_iter().zip(related) {
         if let Ok(shows) = shows {
-            feeds.related.insert(id, shows);
+            fetched.related.insert(id, shows);
         }
     }
-    state.remember_feeds(at, feeds.clone()).await;
+    feeds.merge_from(&fetched);
+    state.remember_show_feeds(ticket, fetched).await;
     feeds
 }
 
 /// [`show_feeds`] for movies.
-async fn movie_feeds(state: &AppState, client: &TraktClient, seeds: &[u64], force: bool) -> Feeds {
-    let (at, mut feeds) = state.feeds(force).await;
+async fn movie_feeds(
+    state: &AppState,
+    client: &TraktClient,
+    seeds: &[u64],
+    force: bool,
+) -> Feeds<Movie> {
+    let (ticket, mut feeds) = state.movie_feeds(force).await;
     let missing: Vec<u64> = seeds
         .iter()
         .copied()
-        .filter(|id| !feeds.related_movies.contains_key(id))
+        .filter(|id| !feeds.related.contains_key(id))
         .collect();
     let (recommended, trending, related) = futures::join!(
         async {
-            match &feeds.recommended_movies {
+            match &feeds.recommended {
                 Some(_) => None,
                 None => client.recommended_movies(40).await.ok(),
             }
         },
         async {
-            match &feeds.trending_movies {
+            match &feeds.trending {
                 Some(_) => None,
                 None => client.trending_movies(30).await.ok(),
             }
         },
         futures::future::join_all(missing.iter().map(|&id| client.related_movies(id, 20))),
     );
-    if recommended.is_some() {
-        feeds.recommended_movies = recommended;
-    }
-    if let Some(trending) = trending {
-        feeds.trending_movies = Some(trending.into_iter().map(|t| t.movie).collect());
-    }
+    let mut fetched = Feeds {
+        recommended,
+        trending: trending.map(|t| t.into_iter().map(|t| t.movie).collect()),
+        related: HashMap::new(),
+    };
     for (id, movies) in missing.into_iter().zip(related) {
         if let Ok(movies) = movies {
-            feeds.related_movies.insert(id, movies);
+            fetched.related.insert(id, movies);
         }
     }
-    state.remember_feeds(at, feeds.clone()).await;
+    feeds.merge_from(&fetched);
+    state.remember_movie_feeds(ticket, fetched).await;
     feeds
 }
 
@@ -1161,11 +1169,11 @@ pub async fn ai_picks(
             ai::Kind::Movies
         }
     };
-    // Cast and crew looked up for earlier asks are reused.
-    let taste = {
-        let mut people = state.people.lock().await;
-        context.to_prompt_json(&client, &mut people).await
-    };
+    // Cast and crew looked up for earlier asks are reused. The lock isn't
+    // held while Trakt is asked for the rest.
+    let mut people = state.people.lock().await.clone();
+    let taste = context.to_prompt_json(&client, &mut people).await;
+    state.people.lock().await.extend(people);
     let picks = ai::pick(&config, kind, mood, &candidates, &taste)
         .await
         .map_err(to_ui_error)?;
@@ -1184,17 +1192,30 @@ pub async fn ai_picks(
         }
     }))
     .await;
+    // Caps apply to what's left after dropping ones Trakt doesn't have or
+    // the user has seen, so spares can stand in.
     let mut seen = HashSet::new();
+    let (mut own, mut listed) = (0, 0);
     let chosen: Vec<(Suggestion, String)> = picks
         .into_iter()
         .zip(looked_up)
         .filter_map(|(pick, looked_up)| {
-            let suggestion = match pick.choice {
-                ai::Choice::Candidate(id) => suggestions.iter().find(|s| s.id == id).cloned(),
-                ai::Choice::Title { .. } => looked_up,
-            }?;
-            (!found.exclude.contains(&suggestion.id) && seen.insert(suggestion.id))
-                .then_some((suggestion, pick.reason))
+            let (suggestion, count, cap) = match pick.choice {
+                ai::Choice::Candidate(id) => (
+                    suggestions.iter().find(|s| s.id == id).cloned()?,
+                    &mut listed,
+                    ai::MAX_LISTED,
+                ),
+                ai::Choice::Title { .. } => (looked_up?, &mut own, ai::MAX_OWN),
+            };
+            if *count == cap
+                || found.exclude.contains(&suggestion.id)
+                || !seen.insert(suggestion.id)
+            {
+                return None;
+            }
+            *count += 1;
+            Some((suggestion, pick.reason))
         })
         .collect();
     if chosen.is_empty() {
@@ -1216,7 +1237,8 @@ pub async fn ai_picks(
         .collect())
 }
 
-/// A show or movie the AI named, found on Trakt by its title and year.
+/// A show or movie the AI named, found on Trakt by its title and year: the
+/// closest match among the search results (see [`ai::title_match`]).
 async fn find_title(
     client: &TraktClient,
     media: Media,
@@ -1230,15 +1252,21 @@ async fn find_title(
             .await
             .ok()?
             .into_iter()
-            .find(|r| ai::same_title(r.show.display_title(), r.show.year, title, year))
-            .and_then(|r| Suggestion::show(&r.show, model)),
+            .filter_map(|r| {
+                ai::title_match(r.show.display_title(), r.show.year, title, year).map(|m| (m, r))
+            })
+            .min_by_key(|(m, _)| *m)
+            .and_then(|(_, r)| Suggestion::show(&r.show, model)),
         Media::Movie => client
             .search_movies(title)
             .await
             .ok()?
             .into_iter()
-            .find(|r| ai::same_title(r.movie.display_title(), r.movie.year, title, year))
-            .and_then(|r| Suggestion::movie(&r.movie, model)),
+            .filter_map(|r| {
+                ai::title_match(r.movie.display_title(), r.movie.year, title, year).map(|m| (m, r))
+            })
+            .min_by_key(|(m, _)| *m)
+            .and_then(|(_, r)| Suggestion::movie(&r.movie, model)),
     }
 }
 

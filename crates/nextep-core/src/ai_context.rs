@@ -66,6 +66,9 @@ pub struct TasteContext {
     movies: Vec<MovieFacts>,
     /// Every watched movie as "Title (year)"; empty unless added.
     seen_movies: Vec<String>,
+    /// Picking movies (set by `with_movies`), so `already_seen` lists movies
+    /// even if none were watched yet.
+    movie_picks: bool,
 }
 
 impl TasteContext {
@@ -116,6 +119,7 @@ impl TasteContext {
         Self {
             movies: Vec::new(),
             seen_movies: Vec::new(),
+            movie_picks: false,
             shows,
             unwatched_dropped,
         }
@@ -124,6 +128,7 @@ impl TasteContext {
     /// Adds the movies watched, for movie picks: the most recent in full, and
     /// all of them as titles the model mustn't suggest.
     pub fn with_movies(mut self, watched: &[WatchedMovie]) -> Self {
+        self.movie_picks = true;
         self.seen_movies = watched
             .iter()
             .map(|w| with_year(w.movie.display_title(), w.movie.year))
@@ -162,7 +167,7 @@ impl TasteContext {
             "favourite_people": self.favourite_people(client, people).await,
         });
         // Titles not to suggest: the movies for movie picks, else the shows.
-        if self.seen_movies.is_empty() {
+        if !self.movie_picks {
             taste["already_seen"] = json!(
                 self.shows
                     .iter()
@@ -513,6 +518,13 @@ mod tests {
         assert_eq!(with["recent_movies"][0]["title"], "Newer");
         assert_eq!(with["recent_movies"][1]["title"], "Older");
         assert_eq!(with["already_seen"], json!(["Older", "Newer"]));
+
+        // Movie picks before any movie was watched: no shows in already_seen.
+        let none = context()
+            .with_movies(&[])
+            .to_prompt_json(&client, &mut HashMap::new())
+            .await;
+        assert_eq!(none["already_seen"], json!([]));
     }
 
     #[tokio::test]

@@ -53,6 +53,8 @@ impl TraktClient {
             // Android freezes backgrounded apps; don't reuse connections the
             // server has long since closed.
             .pool_idle_timeout(std::time::Duration::from_secs(30))
+            // A request that hangs would hold up whatever waits on it.
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("static reqwest config is valid");
         Self {

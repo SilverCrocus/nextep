@@ -156,13 +156,19 @@ fn AskAi() -> impl IntoView {
     let asking = RwSignal::new(false);
     // Seconds waited; with thinking turned up it can take a minute or more.
     let elapsed = RwSignal::new(0u32);
+    // Each ask (and each Shows/Movies switch) gets a new number; an answer or
+    // timer from an older one is ignored.
+    let generation = StoredValue::new(0u32);
 
-    // Picks for shows don't belong under Movies, and the other way round.
+    // Picks for shows don't belong under Movies, and the other way round. A
+    // question still out for the other side is let go.
     Effect::new(move |previous: Option<Media>| {
         let media = nav.media.get();
         if previous.is_some_and(|p| p != media) {
+            generation.update_value(|g| *g += 1);
             picks.set(None);
             error.set(None);
+            asking.set(false);
         }
         media
     });
@@ -186,12 +192,18 @@ fn AskAi() -> impl IntoView {
         if text.trim().is_empty() || asking.get_untracked() {
             return;
         }
+        generation.update_value(|g| *g += 1);
+        let current = generation.get_value();
+        let is_current = move || generation.get_value() == current;
         asking.set(true);
         error.set(None);
         elapsed.set(0);
         spawn_local(async move {
-            while asking.get_untracked() {
+            loop {
                 gloo_timers::future::TimeoutFuture::new(1000).await;
+                if !is_current() || !asking.get_untracked() {
+                    break;
+                }
                 elapsed.update(|s| *s += 1);
             }
         });
@@ -201,10 +213,10 @@ fn AskAi() -> impl IntoView {
                 movies: media == Media::Movies,
             };
             let result = api::call::<Vec<AiPick>>("ai_picks", args).await;
-            asking.set(false);
-            if nav.media.get_untracked() != media {
+            if !is_current() {
                 return;
             }
+            asking.set(false);
             match result {
                 Ok(list) => picks.set(Some(list)),
                 Err(e) => nav.report(e, error),

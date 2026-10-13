@@ -51,6 +51,10 @@ fn schedule<R: Runtime>(
             .builder()
             .id(alert.id)
             .channel_id(CHANNEL)
+            // res/drawable/ic_stat_nextep.xml. The plugin takes no settings
+            // in tauri.conf.json (it fails to start with any), so the icon
+            // goes on each notification.
+            .icon("ic_stat_nextep")
             .title(&alert.title)
             .body(&alert.body)
             .auto_cancel()
