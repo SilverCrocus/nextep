@@ -1,5 +1,5 @@
-//! Settings page: new-episode alerts, and the AI provider and key for AI
-//! picks.
+//! Settings page: new-episode alerts, updates, and the AI provider and key
+//! for AI picks.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -132,6 +132,7 @@ pub fn SettingsPage() -> impl IntoView {
                 <h1 class="show-title">"Settings"</h1>
 
                 <Alerts/>
+                <Updates/>
 
                 <h2 class="section">"AI picks"</h2>
                 <p class="hint small">
@@ -225,8 +226,6 @@ pub fn SettingsPage() -> impl IntoView {
                         view! { <p class=if ok { "hint" } else { "warn" }>{text}</p> }
                     })
                 }}
-
-                <p class="version">{move || format!("Nextep v{}", nav.version.get())}</p>
             </div>
         </div>
     }
@@ -289,5 +288,132 @@ fn Alerts() -> impl IntoView {
                 })
         }}
         {move || error.get().map(|e| view! { <p class="warn">{e}</p> })}
+    }
+}
+
+/// The version, "Check for updates", and installing updates on their own.
+#[component]
+fn Updates() -> impl IntoView {
+    let nav = nav();
+    let status = RwSignal::new(None::<api::UpdateStatus>);
+    let auto = RwSignal::new(api::auto_update());
+    let checking = RwSignal::new(false);
+    // `Some(None)`: up to date.
+    let found = RwSignal::new(None::<Option<api::Release>>);
+    let note = RwSignal::new(None::<String>);
+
+    // Again on coming back from Android's settings.
+    Effect::new(move |_| {
+        nav.changed.track();
+        spawn_local(async move { status.set(Some(api::update_status().await)) });
+    });
+
+    let check = move |_| {
+        checking.set(true);
+        note.set(None);
+        spawn_local(async move {
+            match api::call::<Option<api::Release>>("check_update", ()).await {
+                Ok(release) => found.set(Some(release)),
+                Err(e) => note.set(Some(e)),
+            }
+            checking.set(false);
+        });
+    };
+    let install = move |url: String| {
+        #[derive(Serialize)]
+        struct Args {
+            url: String,
+        }
+        note.set(Some("Downloading…".into()));
+        spawn_local(async move {
+            match api::call::<bool>("install_update", Args { url }).await {
+                Ok(true) => note.set(Some("Installing… Nextep will close and update.".into())),
+                Ok(false) => note.set(Some(
+                    "Allow Nextep to install updates, then come back and tap Update again.".into(),
+                )),
+                Err(e) => note.set(Some(e)),
+            }
+        });
+    };
+    let toggle_auto = move |_| {
+        let on = !auto.get_untracked();
+        api::set_auto_update(on);
+        auto.set(on);
+        if !on {
+            spawn_local(api::cancel_auto_install());
+        }
+    };
+    let allow = move |_| {
+        spawn_local(async move {
+            let _ = api::call::<()>("open_install_settings", ()).await;
+        })
+    };
+
+    view! {
+        <h2 class="section">"Updates"</h2>
+        <p class="meta">{move || format!("Nextep v{}", nav.version.get())}</p>
+        <div class="actions">
+            <button class="pill" disabled=move || checking.get() on:click=check>
+                {move || if checking.get() { "Checking…" } else { "Check for updates" }}
+            </button>
+        </div>
+        {move || {
+            found.get().map(|release| match release {
+                None => view! { <p class="hint">"You're on the latest version."</p> }.into_any(),
+                Some(release) => {
+                    let url = release.apk_url.clone();
+                    view! {
+                        <p class="hint">{format!("Nextep {} is available.", release.version)}</p>
+                        {url.map(|url| {
+                            view! {
+                                <button class="pill on" on:click=move |_| install(url.clone())>
+                                    "Update now"
+                                </button>
+                            }
+                        })}
+                    }
+                    .into_any()
+                }
+            })
+        }}
+        {move || note.get().map(|n| view! { <p class="hint small">{n}</p> })}
+
+        <div class="actions">
+            <button class="pill" class:on=move || auto.get() on:click=toggle_auto>
+                {move || if auto.get() { "✓ Update automatically" } else { "Update automatically" }}
+            </button>
+        </div>
+        <p class="hint small">
+            {move || match status.get() {
+                Some(s) if !s.allowed => {
+                    "To update itself, Nextep needs Android's permission to install apps.".to_string()
+                }
+                Some(api::UpdateStatus { owner: Some(owner), .. }) => {
+                    let owner = match owner.as_str() {
+                        "dev.imranr.obtainium" => "Obtainium",
+                        "com.android.vending" => "Google Play",
+                        other => other,
+                    };
+                    format!(
+                        "{owner} manages Nextep's updates on this phone, so Android asks before Nextep updates itself. Updates through {owner} still work."
+                    )
+                }
+                Some(s) if !s.silent => {
+                    "On this Android version, Android asks you to confirm each update.".to_string()
+                }
+                _ if auto.get() => {
+                    "Each time Nextep opens it checks for a new version, downloads it, and installs it a few seconds after you leave. No Obtainium needed."
+                        .to_string()
+                }
+                _ => "New versions show a banner; tap Update to install.".to_string(),
+            }}
+        </p>
+        {move || {
+            status.get().is_some_and(|s| !s.allowed).then(|| {
+                view! {
+                    <button class="pill" on:click=allow>"Allow installing updates"</button>
+                }
+            })
+        }}
     }
 }

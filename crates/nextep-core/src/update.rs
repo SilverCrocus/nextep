@@ -1,13 +1,16 @@
 //! Checks GitHub Releases for a newer version of Nextep.
 //!
-//! Releases are built and signed by `.github/workflows/release.yml`. Apps
-//! like Obtainium install updates automatically; this check is for everyone
-//! else.
+//! Releases are built and signed by `.github/workflows/release.yml` and
+//! named `nextep-<version>.apk`. The check reads where GitHub's "latest
+//! release" page redirects to, which isn't rate-limited like the API (60
+//! calls an hour per IP address, shared by everyone behind a mobile
+//! carrier's NAT); the API is the fallback.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
+const REPO_URL: &str = "https://github.com/SilverCrocus/nextep";
 const LATEST_URL: &str = "https://api.github.com/repos/SilverCrocus/nextep/releases/latest";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,6 +36,58 @@ struct GitHubAsset {
 
 /// The latest release, if it is newer than `current`.
 pub async fn check(current: &str) -> Result<Option<Release>> {
+    let latest = match latest_from_redirect().await {
+        Some(release) => release,
+        None => match latest_from_api().await? {
+            Some(release) => release,
+            None => return Ok(None),
+        },
+    };
+    Ok(is_newer(&latest.version, current).then_some(latest))
+}
+
+/// `/releases/latest` redirects to `/releases/tag/<tag>`.
+async fn latest_from_redirect() -> Option<Release> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .ok()?;
+    let res = client
+        .head(format!("{REPO_URL}/releases/latest"))
+        .header("User-Agent", concat!("Nextep/", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+        .ok()?;
+    let location = res
+        .headers()
+        .get(reqwest::header::LOCATION)?
+        .to_str()
+        .ok()?;
+    release_at(location)
+}
+
+/// The release a `/releases/tag/<tag>` URL points to, with its APK's
+/// download URL (from the naming the release workflow uses).
+fn release_at(location: &str) -> Option<Release> {
+    let tag = location
+        .split("/releases/tag/")
+        .nth(1)?
+        .trim_end_matches('/');
+    let version = tag.strip_prefix('v')?;
+    if tag.is_empty() || tag.contains(['/', '?', '#']) {
+        return None;
+    }
+    Some(Release {
+        version: version.to_owned(),
+        page_url: format!("{REPO_URL}/releases/tag/{tag}"),
+        apk_url: Some(format!(
+            "{REPO_URL}/releases/download/{tag}/nextep-{version}.apk"
+        )),
+    })
+}
+
+async fn latest_from_api() -> Result<Option<Release>> {
     let res = reqwest::Client::new()
         .get(LATEST_URL)
         .header("Accept", "application/vnd.github+json")
@@ -51,9 +106,6 @@ pub async fn check(current: &str) -> Result<Option<Release>> {
     }
     let latest: GitHubRelease = res.json().await?;
     let version = latest.tag_name.trim_start_matches('v').to_owned();
-    if !is_newer(&version, current) {
-        return Ok(None);
-    }
     Ok(Some(Release {
         apk_url: latest
             .assets
@@ -94,6 +146,21 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_release_from_the_redirect() {
+        let release =
+            release_at("https://github.com/SilverCrocus/nextep/releases/tag/v0.9.0").unwrap();
+        assert_eq!(release.version, "0.9.0");
+        assert_eq!(
+            release.apk_url.as_deref(),
+            Some(
+                "https://github.com/SilverCrocus/nextep/releases/download/v0.9.0/nextep-0.9.0.apk"
+            )
+        );
+        assert!(release_at("https://github.com/SilverCrocus/nextep/releases").is_none());
+        assert!(release_at("https://github.com/x/releases/tag/latest").is_none());
+    }
 
     #[test]
     fn compares_versions_numerically() {

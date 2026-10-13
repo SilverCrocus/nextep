@@ -226,7 +226,7 @@ fn StatsStrip() -> impl IntoView {
 }
 
 /// 4531 → "4,531".
-fn format_count(n: u64) -> String {
+pub(crate) fn format_count(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
@@ -250,19 +250,10 @@ fn capitalize(s: &str) -> String {
 #[component]
 pub fn LibraryFooter() -> impl IntoView {
     let nav = nav();
-    let sign_out = move |_| {
-        spawn_local(async move {
-            let _ = api::call::<()>("sign_out", ()).await;
-            nav.sign_out();
-        })
-    };
-
     view! {
         <StatsStrip/>
         <div class="footer">
-            <button class="ghost" on:click=move |_| nav.open_settings()>"Settings"</button>
-            <button class="ghost" on:click=sign_out>"Sign out of Trakt"</button>
-            <p class="version">{move || format!("Nextep v{}", nav.version.get())}</p>
+            <button class="ghost" on:click=move |_| nav.open_profile()>"Profile & settings"</button>
         </div>
     }
 }

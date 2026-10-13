@@ -155,8 +155,20 @@ impl TraktClient {
         send_json(self.authed(Method::GET, &path)?).await
     }
 
+    /// The account's totals. Trakt answers `/users/me/stats` with an empty
+    /// 204 for some accounts; asking by username then works.
     pub async fn user_stats(&self) -> Result<UserStats> {
-        send_json(self.authed(Method::GET, "/users/me/stats")?).await
+        match send_json(self.authed(Method::GET, "/users/me/stats")?).await {
+            Err(Error::Api { status: 204, .. }) => {
+                let user = self.user_settings().await?.user.ok_or(Error::Api {
+                    status: 204,
+                    body: "no totals for this account".into(),
+                })?;
+                let slug = user.ids.and_then(|ids| ids.slug).unwrap_or(user.username);
+                send_json(self.authed(Method::GET, &format!("/users/{slug}/stats"))?).await
+            }
+            other => other,
+        }
     }
 
     /// The most recently watched episodes, newest first.
@@ -332,9 +344,13 @@ impl TraktClient {
 
     /// How many personal lists the account may have (12 on free accounts).
     pub async fn list_limit(&self) -> Result<Option<u32>> {
-        let settings: UserSettings =
-            send_json(self.authed(Method::GET, "/users/settings")?).await?;
+        let settings = self.user_settings().await?;
         Ok(settings.limits.and_then(|l| l.list).map(|l| l.count))
+    }
+
+    /// The account: who's signed in, and its limits.
+    pub async fn user_settings(&self) -> Result<UserSettings> {
+        send_json(self.authed(Method::GET, "/users/settings")?).await
     }
 
     // ---- discovery --------------------------------------------------------
@@ -454,7 +470,21 @@ async fn check(res: reqwest::Response) -> Result<reqwest::Response> {
 }
 
 async fn send_json<T: DeserializeOwned>(req: RequestBuilder) -> Result<T> {
-    Ok(check(req.send().await?).await?.json().await?)
+    let res = check(req.send().await?).await?;
+    let status = res.status().as_u16();
+    let body = res.bytes().await?;
+    // Say what came back rather than just "EOF while parsing".
+    serde_json::from_slice(&body).map_err(|e| Error::Api {
+        status,
+        body: if body.is_empty() {
+            "an empty response".into()
+        } else {
+            format!(
+                "a response Nextep couldn't read ({e}): {}",
+                String::from_utf8_lossy(&body[..body.len().min(200)])
+            )
+        },
+    })
 }
 
 fn movies_body(movie_trakt_id: u64) -> serde_json::Value {

@@ -58,6 +58,16 @@ what gets used daily stays, the rest is cut or deferred.
       you're caught up on airs (on hold / dropped left out), turned on in
       Settings. Scheduled with Android's alarm manager from the calendar
       whenever Progress refreshes, so they fire with the app closed
+- [x] **Updates without Obtainium**: on Android 12+ Nextep updates itself
+      with no confirmation (after allowing it to install apps once): new
+      versions download in the background and install when you leave the
+      app. "Check for updates" and an "Update automatically" switch in
+      Settings. The check reads GitHub's latest-release redirect, which
+      isn't rate-limited like the API
+- [x] **Profile** page (person icon at the top): Trakt avatar, name, member
+      since, totals (shows, episodes, movies, time), Settings, sign out
+- [x] Marking a movie, or an episode of a show, watched takes it off the
+      watchlist
 - [ ] Home-screen widget
 
 ## Done from "Later"

@@ -261,7 +261,45 @@ pub enum ItemId {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserSettings {
     #[serde(default)]
+    pub user: Option<TraktUser>,
+    #[serde(default)]
     pub limits: Option<Limits>,
+}
+
+/// The signed-in account (the `user` part of `GET /users/settings`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TraktUser {
+    pub username: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub vip: bool,
+    #[serde(default)]
+    pub joined_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub location: Option<String>,
+    #[serde(default)]
+    pub ids: Option<UserIds>,
+    #[serde(default)]
+    pub images: Option<UserImages>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UserIds {
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UserImages {
+    #[serde(default)]
+    pub avatar: Option<ImageUrl>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImageUrl {
+    #[serde(default)]
+    pub full: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -281,6 +319,16 @@ pub struct ListLimit {
 pub struct UserStats {
     pub shows: ShowStats,
     pub episodes: EpisodeStats,
+    #[serde(default)]
+    pub movies: MovieStats,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MovieStats {
+    #[serde(default)]
+    pub watched: u64,
+    #[serde(default)]
+    pub minutes: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -396,6 +444,31 @@ mod tests {
             Some("mdblist")
         );
         assert_eq!(list("Shows to watch with Sam").managed_by(), None);
+    }
+
+    #[test]
+    fn reads_the_account_from_user_settings() {
+        let settings: UserSettings = serde_json::from_str(
+            r#"{
+                "user": {
+                    "username": "sean", "private": false, "name": "Sean Rudford", "vip": true,
+                    "ids": {"slug": "sean", "uuid": "x"}, "joined_at": "2010-09-25T17:49:25.000Z",
+                    "location": "SF", "images": {"avatar": {"full": "https://walter-r2.trakt.tv/a.jpg"}}
+                },
+                "account": {"timezone": "America/Los_Angeles"},
+                "limits": {"list": {"count": 12, "item_count": 1000}}
+            }"#,
+        )
+        .unwrap();
+        let user = settings.user.unwrap();
+        assert_eq!(user.username, "sean");
+        assert!(user.vip);
+        assert_eq!(user.ids.unwrap().slug.as_deref(), Some("sean"));
+        assert_eq!(
+            user.images.unwrap().avatar.unwrap().full.as_deref(),
+            Some("https://walter-r2.trakt.tv/a.jpg")
+        );
+        assert_eq!(settings.limits.unwrap().list.unwrap().count, 12);
     }
 
     #[test]

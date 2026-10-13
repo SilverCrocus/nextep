@@ -9,6 +9,7 @@ use crate::discover::Discover;
 use crate::library::{Library, LibraryFooter};
 use crate::lists::ListPage;
 use crate::movies::{MovieLibrary, MoviePage, MovieProgress};
+use crate::profile::ProfilePage;
 use crate::progress::Progress;
 use crate::pull::PullToRefresh;
 use crate::search::SearchPage;
@@ -23,6 +24,7 @@ enum Overlay {
     List(u64),
     Settings,
     Movie(u64),
+    Profile,
 }
 
 /// The title and poster that were tapped, shown while a show or movie page
@@ -78,6 +80,10 @@ impl Nav {
 
     pub fn open_list(&self, list_id: u64) {
         self.push(Overlay::List(list_id));
+    }
+
+    pub fn open_profile(&self) {
+        self.push(Overlay::Profile);
     }
 
     pub fn open_settings(&self) {
@@ -353,16 +359,35 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         })
     });
 
-    // Once per launch: is there a newer release on GitHub?
+    // Once per launch: is there a newer release on GitHub? With automatic
+    // updates on (and Android 12+ letting Nextep update itself), it's
+    // downloaded now and installed once the app is left.
     let update = RwSignal::new(None::<api::Release>);
-    spawn_local(async move {
-        if let Ok(Some(release)) = api::call::<Option<api::Release>>("check_update", ()).await {
-            update.set(Some(release));
-        }
-    });
-    // Updating downloads inside the app and opens Android's installer.
     let update_note = RwSignal::new(None::<String>);
     let updating = RwSignal::new(false);
+    spawn_local(async move {
+        let Ok(Some(release)) = api::call::<Option<api::Release>>("check_update", ()).await else {
+            return;
+        };
+        let apk_url = release.apk_url.clone();
+        update.set(Some(release));
+        if let Some(url) = apk_url
+            && api::auto_update()
+            && api::update_status().await.silent
+        {
+            #[derive(serde::Serialize)]
+            struct Args {
+                url: String,
+            }
+            if api::call::<()>("install_when_left", Args { url })
+                .await
+                .is_ok()
+            {
+                update_note.set(Some("Installs when you leave Nextep.".into()));
+            }
+        }
+    });
+    // Updating now downloads inside the app and installs it.
     let update_banner = move || {
         update.get().map(|release| {
             let version = release.version.clone();
@@ -383,7 +408,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
                 update_note.set(Some("Downloading…".into()));
                 spawn_local(async move {
                     match api::call::<bool>("install_update", Args { url }).await {
-                        Ok(true) => update_note.set(None),
+                        Ok(true) => update_note.set(Some("Installing… Nextep will close and update.".into())),
                         Ok(false) => update_note.set(Some(
                             "Allow Nextep to install updates, then come back and tap Update again.".into(),
                         )),
@@ -401,7 +426,14 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
                     <button class="pill" on:click=start disabled=move || updating.get()>
                         {move || if updating.get() { "Updating…" } else { "Update" }}
                     </button>
-                    <button class="icon" aria-label="Dismiss" on:click=move |_| update.set(None)>
+                    <button
+                        class="icon"
+                        aria-label="Dismiss"
+                        on:click=move |_| {
+                            update.set(None);
+                            spawn_local(api::cancel_auto_install());
+                        }
+                    >
                         "✕"
                     </button>
                 </div>
@@ -417,6 +449,7 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         Overlay::Show(show_id) => view! { <ShowPage show_id/> }.into_any(),
         Overlay::List(list_id) => view! { <ListPage list_id/> }.into_any(),
         Overlay::Settings => view! { <SettingsPage/> }.into_any(),
+        Overlay::Profile => view! { <ProfilePage/> }.into_any(),
         Overlay::Movie(movie_id) => view! { <MoviePage movie_id/> }.into_any(),
     };
 
@@ -424,9 +457,14 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
         <main class="screen">
             <header class="top">
                 <h1>{move || tab.get().label()}</h1>
-                <button class="icon" aria-label="Search" on:click=move |_| nav.open_search()>
-                    <SearchIcon/>
-                </button>
+                <div class="header-actions">
+                    <button class="icon" aria-label="Search" on:click=move |_| nav.open_search()>
+                        <SearchIcon/>
+                    </button>
+                    <button class="icon" aria-label="Profile and settings" on:click=move |_| nav.open_profile()>
+                        <ProfileIcon/>
+                    </button>
+                </div>
             </header>
             {update_banner}
             <section class="content">
@@ -475,6 +513,25 @@ fn Main(on_signed_out: Callback<()>, version: RwSignal<String>) -> impl IntoView
             </nav>
             <For each=overlay_stack key=|entry| *entry children=render_overlay/>
         </main>
+    }
+}
+
+/// A person outline, for the profile button.
+#[component]
+pub fn ProfileIcon() -> impl IntoView {
+    view! {
+        <svg
+            viewBox="0 0 24 24"
+            width="22"
+            height="22"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linecap="round"
+        >
+            <circle cx="12" cy="8" r="4"></circle>
+            <path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"></path>
+        </svg>
     }
 }
 

@@ -336,6 +336,23 @@ impl AppState {
 
     /// Trakt ids on the watchlist, reusing a fetch from the last couple of
     /// minutes.
+    /// Whether a show is on the watchlist, from the last fetch (however old);
+    /// `None` if it hasn't been fetched.
+    pub async fn on_watchlist_cached(&self, show_id: u64) -> Option<bool> {
+        let watchlist = self.watchlist.lock().await;
+        watchlist.as_ref().map(|(_, ids)| ids.contains(&show_id))
+    }
+
+    /// [`Self::on_watchlist_cached`] for movies.
+    pub async fn movie_on_watchlist_cached(&self, movie_id: u64) -> Option<bool> {
+        let movies = self.movies.lock().await;
+        movies.as_ref().map(|(_, (_, watchlist))| {
+            watchlist
+                .iter()
+                .any(|w| w.movie.ids.trakt == Some(movie_id))
+        })
+    }
+
     pub async fn watchlist_ids(&self, client: &TraktClient) -> Result<HashSet<u64>, String> {
         if let Some((at, ids)) = &*self.watchlist.lock().await
             && Utc::now() - *at < Duration::seconds(REUSE_SECS)

@@ -55,7 +55,7 @@ a great Trakt client that has grown large over the years: news feeds,
 comments, premium tiers, analytics and dozens of settings. Nextep keeps the
 parts that get used every day and drops the rest.
 
-- **Lighter.** A handful of screens and two sections in Settings. Every
+- **Lighter.** A handful of screens and a short Settings page. Every
   screen opens straight away from its last saved copy, then refreshes.
 - **Sorting that makes sense.** New episodes come first. *Upcoming* only lists
   shows you're caught up on, so a show you're 40 episodes behind on never
@@ -124,11 +124,14 @@ parts that get used every day and drops the rest.
   left out. Alerts are scheduled with Android whenever Progress refreshes, so
   they arrive with the app closed; open Nextep now and then to keep them
   coming.
+- **Profile**: your Trakt avatar, name and totals (shows, episodes, movies,
+  time watched), with Settings and sign-out. It's the person icon at the top
+  right of every tab.
+- **Marking something watched** takes it off your watchlist.
 - **Works offline**: the last good result of each screen is saved on the
   phone.
-- **In-app updates** from GitHub Releases (see [Updating](#updating)).
-
-Settings live at the bottom of the Library tab.
+- **Updates itself** from GitHub Releases, no Obtainium needed (see
+  [Updating](#updating)).
 
 ## Install
 
@@ -157,14 +160,25 @@ after that, screens open instantly.
 
 ## Updating
 
-When a new release is out, Nextep shows a banner: *Nextep x.y.z is available*. Tap **Update** and Nextep downloads the APK itself and opens
-Android's installer; confirm, and you're done. No browser or Obtainium
-needed. The first time, Android asks you to allow Nextep to install apps:
-allow it, come back, and tap **Update** again. Nextep only installs APKs from
-its own GitHub releases.
+Nextep keeps itself up to date; no app store or Obtainium needed.
 
-Obtainium works just as well, and on Android 12 and newer it can install
-updates in the background.
+- **Automatically** (Android 12 and newer): each time Nextep opens, it checks
+  GitHub for a new release, downloads it in the background, and installs it a
+  few seconds after you leave the app, without asking. Android only allows
+  this once you've let Nextep install apps (it asks the first time you
+  update), and you can turn it off in **Settings → Updates**.
+- **With a tap**: when a new release is out, a banner says *Nextep x.y.z is
+  available*. Tap **Update**, or use **Check for updates** in Settings.
+  Where Android needs a confirmation (older Android versions, or when
+  another app such as Obtainium manages Nextep's updates on that phone), it
+  shows its installer screen.
+
+The first time, Android asks you to allow Nextep to install apps: allow it,
+come back, and tap **Update** again. Nextep only installs APKs from its own
+GitHub releases.
+
+Obtainium works just as well if you already use it; Settings tells you when
+it's the one managing Nextep's updates.
 
 Every release is signed with the same key, so updates install over the
 existing app and keep your data.
@@ -177,7 +191,7 @@ the AI box just points you to Settings.
 
 1. Get an API key from [DeepSeek](https://platform.deepseek.com) (the
    default) or another OpenAI-compatible provider.
-2. In Nextep, open **Library → Settings → AI picks**. Leave the provider URL
+2. In Nextep, open **Profile (the person icon at the top right) → Settings → AI picks**. Leave the provider URL
    at `https://api.deepseek.com` or enter your provider's, paste the key, tap
    **Check key** to load the provider's models, choose one and tap **Save**.
 3. In Discover, type what you're in the mood for and tap **Ask AI**. The
@@ -215,7 +229,7 @@ Nextep is a Rust workspace with three parts:
 |------|--------------|
 | [`crates/nextep-core`](crates/nextep-core) | Platform-independent logic: Trakt and TMDB clients, models, progress ordering, On hold / Dropped labels, the taste model, AI picks, alert planning and the update check. No UI or Android code, so it's unit tested on any machine with `cargo test -p nextep-core`. |
 | [`src-tauri`](src-tauri) | The [Tauri 2](https://tauri.app) shell: the commands the UI calls, saved sign-in, settings and screen snapshots, notifications, and the in-app installer. The generated Android project lives in `src-tauri/gen/android` and is committed. |
-| [`src`](src) | The UI, written with [Leptos](https://leptos.dev) and compiled to WebAssembly by [Trunk](https://trunkrs.dev). One file per screen: `progress.rs`, `calendar.rs`, `discover.rs`, `library.rs`, `lists.rs`, `show.rs`, `movies.rs`, `search.rs`, `settings.rs`. |
+| [`src`](src) | The UI, written with [Leptos](https://leptos.dev) and compiled to WebAssembly by [Trunk](https://trunkrs.dev). One file per screen: `progress.rs`, `calendar.rs`, `discover.rs`, `library.rs`, `lists.rs`, `show.rs`, `movies.rs`, `search.rs`, `profile.rs`, `settings.rs`. |
 
 Each screen first shows the snapshot saved after its last successful load,
 then asks Trakt for fresh data. That's why Nextep opens instantly and still

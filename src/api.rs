@@ -459,6 +459,34 @@ pub fn history_back() {
     }
 }
 
+/// Install updates on their own (on unless turned off in Settings).
+pub fn auto_update() -> bool {
+    load_pref("auto_update").as_deref() != Some("off")
+}
+
+pub fn set_auto_update(on: bool) {
+    save_pref("auto_update", if on { "on" } else { "off" });
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct UpdateStatus {
+    /// Android lets Nextep install apps ("Install unknown apps").
+    pub allowed: bool,
+    /// ...and without a confirmation (Android 12+).
+    pub silent: bool,
+    /// Another app that owns Nextep's updates (e.g. Obtainium).
+    pub owner: Option<String>,
+}
+
+/// Forgets an update waiting for Nextep to be left.
+pub async fn cancel_auto_install() {
+    let _ = call::<()>("cancel_when_left", ()).await;
+}
+
+pub async fn update_status() -> UpdateStatus {
+    call("update_status", ()).await.unwrap_or_default()
+}
+
 /// Per-device preferences such as the chosen sort. Missing storage is fine.
 pub fn load_pref(key: &str) -> Option<String> {
     let storage = global("localStorage")?;

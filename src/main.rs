@@ -5,6 +5,7 @@ mod discover;
 mod library;
 mod lists;
 mod movies;
+mod profile;
 mod progress;
 mod pull;
 mod search;

@@ -22,7 +22,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::notify;
-use crate::state::{AppState, Feeds, to_ui_error};
+use crate::state::{AppState, Feeds, NOT_SIGNED_IN, to_ui_error};
 use crate::{TMDB_API_KEY, TRAKT_CLIENT_ID};
 
 // ---- status & sign-in -------------------------------------------------------
@@ -161,10 +161,19 @@ pub async fn mark_watched(
         .mark_episode_watched(episode_id, Utc::now())
         .await
         .map_err(to_ui_error)?;
-    // Fetch this show's progress again instead of waiting for Trakt's
-    // watched list to say it changed.
     if let Some(show_id) = show_id {
+        // Fetch this show's progress again instead of waiting for Trakt's
+        // watched list to say it changed.
         state.mark_progress_stale(show_id).await;
+        // Watching it now, so it's no longer something to watch later. Only
+        // checked against the watchlist already loaded (the show page loads
+        // it), so marking doesn't wait on another fetch. If removing fails
+        // it just stays on the watchlist.
+        if state.on_watchlist_cached(show_id).await == Some(true)
+            && client.remove_from_watchlist(show_id).await.is_ok()
+        {
+            state.update_watchlist(show_id, false).await;
+        }
     }
     state.invalidate().await;
     Ok(())
@@ -1503,16 +1512,126 @@ pub async fn stats(state: State<'_, AppState>, cached: Option<bool>) -> Result<S
         return state.snapshot("stats");
     }
     let client = state.signed_in_client().await?;
-    let totals = client.user_stats().await.map_err(to_ui_error)?;
     let items = state.items(false).await?;
+    let totals = totals(&state, &client).await?;
     let stats = Stats {
-        episodes: totals.episodes.watched,
-        minutes: totals.episodes.minutes,
-        shows: totals.shows.watched,
+        episodes: totals.episodes,
+        minutes: totals.episode_minutes,
+        shows: totals.shows,
         top_genres: progress::top_genres(&items, 3),
     };
     state.save_snapshot("stats", &stats);
     Ok(stats)
+}
+
+// ---- profile ----------------------------------------------------------------
+
+#[derive(Serialize, Deserialize)]
+pub struct Profile {
+    username: String,
+    name: Option<String>,
+    avatar: Option<String>,
+    vip: bool,
+    joined_at: Option<DateTime<Utc>>,
+    location: Option<String>,
+    /// The profile on trakt.tv.
+    url: String,
+    /// `None` when Trakt has no totals for the account right now.
+    totals: Option<Totals>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Totals {
+    shows: u64,
+    episodes: u64,
+    movies: u64,
+    #[serde(skip)]
+    episode_minutes: u64,
+    /// Episodes and movies together.
+    minutes: u64,
+}
+
+/// Watch totals: Trakt's, or (when Trakt has none for the account, which it
+/// answers with an empty 204 for some) counted from the history on hand.
+async fn totals(state: &AppState, client: &TraktClient) -> Result<Totals, String> {
+    match client.user_stats().await {
+        Ok(stats) => Ok(Totals {
+            shows: stats.shows.watched,
+            episodes: stats.episodes.watched,
+            movies: stats.movies.watched,
+            episode_minutes: stats.episodes.minutes,
+            minutes: stats.episodes.minutes + stats.movies.minutes,
+        }),
+        Err(Error::NotAuthenticated) => Err(NOT_SIGNED_IN.into()),
+        Err(_) => {
+            let items = state.items(false).await?;
+            let movies = state.movie_data(client, false).await.ok();
+            let episodes: u64 = items.iter().map(|i| u64::from(i.completed)).sum();
+            let episode_minutes: u64 = items
+                .iter()
+                .map(|i| u64::from(i.completed) * u64::from(i.show.runtime.unwrap_or(0)))
+                .sum();
+            let (movie_count, movie_minutes) = movies.map_or((0, 0), |(watched, _)| {
+                (
+                    watched.len() as u64,
+                    watched
+                        .iter()
+                        .map(|w| {
+                            u64::from(w.plays.max(1)) * u64::from(w.movie.runtime.unwrap_or(0))
+                        })
+                        .sum(),
+                )
+            });
+            Ok(Totals {
+                shows: items.iter().filter(|i| i.completed > 0).count() as u64,
+                episodes,
+                movies: movie_count,
+                episode_minutes,
+                minutes: episode_minutes + movie_minutes,
+            })
+        }
+    }
+}
+
+/// Who's signed in, with their Trakt totals.
+#[tauri::command]
+pub async fn profile(state: State<'_, AppState>, cached: Option<bool>) -> Result<Profile, String> {
+    if cached.unwrap_or(false) {
+        return state.snapshot("profile");
+    }
+    let client = state.signed_in_client().await?;
+    let (settings, totals) = futures::join!(client.user_settings(), totals(&state, &client));
+    let user = settings
+        .map_err(|e| match to_ui_error(e) {
+            // The UI shows the sign-in screen for this.
+            e if e == NOT_SIGNED_IN => e,
+            e => format!("Couldn't load your Trakt account: {e}"),
+        })?
+        .user
+        .ok_or("Trakt didn't say who's signed in.")?;
+    // Not signed in shows the sign-in screen; other failures just leave the
+    // totals out (rather than showing zeros as if they were real).
+    let totals = match totals {
+        Err(e) if e == NOT_SIGNED_IN => return Err(e),
+        Err(_) => None,
+        Ok(totals) => Some(totals),
+    };
+    let slug = user
+        .ids
+        .and_then(|ids| ids.slug)
+        .unwrap_or_else(|| user.username.clone());
+    let profile = Profile {
+        url: format!("https://trakt.tv/users/{slug}"),
+        avatar: user.images.and_then(|i| i.avatar).and_then(|a| a.full),
+        name: user.name.filter(|n| !n.trim().is_empty()),
+        username: user.username,
+        vip: user.vip,
+        joined_at: user.joined_at,
+        location: user.location.filter(|l| !l.trim().is_empty()),
+        totals,
+    };
+    state.save_snapshot("profile", &profile);
+    Ok(profile)
 }
 
 // ---- show page --------------------------------------------------------------

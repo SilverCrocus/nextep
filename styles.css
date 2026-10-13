@@ -956,3 +956,61 @@ select {
   margin-top: 12px !important;
   white-space: normal;
 }
+
+/* Header: search and profile buttons side by side. */
+.header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* Profile page */
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.avatar {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface);
+}
+
+.avatar.blank {
+  display: grid;
+  place-items: center;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.profile-head .info {
+  min-width: 0;
+}
+
+.badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--accent);
+}
+
+.profile-stats {
+  grid-template-columns: repeat(2, 1fr);
+  margin-top: 24px;
+}
+
+.profile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 28px;
+}
+

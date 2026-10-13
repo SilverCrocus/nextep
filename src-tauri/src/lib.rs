@@ -37,6 +37,10 @@ pub fn run() {
             commands::open_link,
             commands::check_update,
             installer::install_update,
+            installer::install_when_left,
+            installer::cancel_when_left,
+            installer::update_status,
+            installer::open_install_settings,
             movies::movies,
             movies::movie_details,
             movies::mark_movie_watched,
@@ -64,6 +68,7 @@ pub fn run() {
             commands::show_details,
             commands::search,
             commands::set_watchlist,
+            commands::profile,
             commands::alerts,
             commands::set_alerts,
         ])

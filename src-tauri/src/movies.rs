@@ -235,6 +235,12 @@ pub async fn mark_movie_watched(state: State<'_, AppState>, movie_id: u64) -> Re
         .mark_movie_watched(movie_id, Utc::now())
         .await
         .map_err(to_ui_error)?;
+    // Watched, so off the watchlist. Checked against what's already loaded
+    // (the movie page loads it), so marking doesn't wait on another fetch.
+    // If removing fails it just stays there.
+    if state.movie_on_watchlist_cached(movie_id).await == Some(true) {
+        let _ = client.remove_movie_from_watchlist(movie_id).await;
+    }
     state.invalidate_movies().await;
     Ok(())
 }
