@@ -3,3 +3,6 @@
 
 # Local API keys (see .env.example)
 .env
+
+# Claude Code session data (agent worktrees)
+/.claude/
