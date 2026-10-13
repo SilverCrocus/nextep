@@ -144,12 +144,21 @@ pub async fn progress(
 }
 
 #[tauri::command]
-pub async fn mark_watched(state: State<'_, AppState>, episode_id: u64) -> Result<(), String> {
+pub async fn mark_watched(
+    state: State<'_, AppState>,
+    episode_id: u64,
+    show_id: Option<u64>,
+) -> Result<(), String> {
     let client = state.signed_in_client().await?;
     client
         .mark_episode_watched(episode_id, Utc::now())
         .await
         .map_err(to_ui_error)?;
+    // Fetch this show's progress again instead of waiting for Trakt's
+    // watched list to say it changed.
+    if let Some(show_id) = show_id {
+        state.forget_progress(show_id).await;
+    }
     state.invalidate().await;
     Ok(())
 }

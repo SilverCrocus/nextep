@@ -213,7 +213,7 @@ impl AppState {
         let now = Utc::now();
         let mut items = {
             let mut cache = self.progress.lock().await;
-            let items = sync::refresh_progress(&client, &mut cache, now)
+            let items = sync::refresh_progress(&client, &mut cache, now, force)
                 .await
                 .map_err(to_ui_error)?;
             self.save(PROGRESS_FILE, &*cache)?;
@@ -385,6 +385,11 @@ impl AppState {
     /// Forces the next [`Self::items`] call to ask Trakt again.
     pub async fn invalidate(&self) {
         *self.items.lock().await = None;
+    }
+
+    /// Makes the next refresh fetch this show's progress from Trakt.
+    pub async fn forget_progress(&self, show_id: u64) {
+        self.progress.lock().await.forget(show_id);
     }
 
     /// Looks up posters for shows that don't have one cached yet.

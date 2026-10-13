@@ -42,7 +42,7 @@ pub fn ShowPage(show_id: u64) -> impl IntoView {
 
     let on_mark = Callback::new(move |episode_id: u64| {
         spawn_local(async move {
-            match api::mark_watched(episode_id).await {
+            match api::mark_watched(Some(show_id), episode_id).await {
                 Ok(()) => {
                     nav.data_changed();
                     load();

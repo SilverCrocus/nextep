@@ -61,9 +61,9 @@ pub fn Progress() -> impl IntoView {
         }
     });
 
-    let on_mark = Callback::new(move |episode_id: u64| {
+    let on_mark = Callback::new(move |(show_id, episode_id): (Option<u64>, u64)| {
         spawn_local(async move {
-            match api::mark_watched(episode_id).await {
+            match api::mark_watched(show_id, episode_id).await {
                 Ok(()) => nav.data_changed(),
                 Err(e) => nav.report(e, error),
             }
@@ -111,7 +111,7 @@ fn Section(
     title: &'static str,
     kind: Kind,
     items: Vec<Item>,
-    on_mark: Callback<u64>,
+    on_mark: Callback<(Option<u64>, u64)>,
 ) -> impl IntoView {
     if items.is_empty() {
         return ().into_any();
@@ -126,7 +126,7 @@ fn Section(
 }
 
 #[component]
-fn Row(item: Item, kind: Kind, on_mark: Callback<u64>) -> impl IntoView {
+fn Row(item: Item, kind: Kind, on_mark: Callback<(Option<u64>, u64)>) -> impl IntoView {
     let nav = nav();
     let ep = item.next_episode;
     let code = ep.as_ref().map(|e| e.code()).unwrap_or_default();
@@ -188,7 +188,7 @@ fn Row(item: Item, kind: Kind, on_mark: Callback<u64>) -> impl IntoView {
                             disabled=move || marking.get()
                             on:click=move |_| {
                                 marking.set(true);
-                                on_mark.run(id);
+                                on_mark.run((show_id, id));
                             }
                         >
                             "✓"

@@ -33,13 +33,22 @@ pub async fn open_link(url: &str) {
     let _ = call::<()>("open_link", Args { url }).await;
 }
 
-pub async fn mark_watched(episode_id: u64) -> Result<(), String> {
+/// `show_id` is the episode's show, whose progress is then fetched afresh.
+pub async fn mark_watched(show_id: Option<u64>, episode_id: u64) -> Result<(), String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Args {
         episode_id: u64,
+        show_id: Option<u64>,
     }
-    call("mark_watched", Args { episode_id }).await
+    call(
+        "mark_watched",
+        Args {
+            episode_id,
+            show_id,
+        },
+    )
+    .await
 }
 
 pub async fn set_show_status(show_id: u64, status: Option<ShowStatus>) -> Result<(), String> {
