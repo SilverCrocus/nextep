@@ -1,6 +1,7 @@
 mod commands;
 mod installer;
 mod movies;
+mod notify;
 mod state;
 
 use std::fs;
@@ -16,6 +17,7 @@ const TMDB_API_KEY: Option<&str> = option_env!("TMDB_API_KEY");
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(installer::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
@@ -62,6 +64,8 @@ pub fn run() {
             commands::show_details,
             commands::search,
             commands::set_watchlist,
+            commands::alerts,
+            commands::set_alerts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

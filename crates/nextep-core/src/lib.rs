@@ -5,6 +5,7 @@
 
 pub mod ai;
 pub mod ai_context;
+pub mod alerts;
 pub mod labels;
 pub mod models;
 pub mod progress;

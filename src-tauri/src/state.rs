@@ -6,17 +6,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use nextep_core::ai::AiConfig;
+use nextep_core::alerts::{self, Alert};
 use nextep_core::chrono::{DateTime, Duration, Utc};
 use nextep_core::labels::{Labels, ShowStatus};
 use nextep_core::models::{
-    ItemId, ListItem, Movie, Show, ShowPeople, TraktList, WatchedMovie, WatchlistMovie,
+    CalendarEntry, ItemId, ListItem, Movie, Show, ShowPeople, TraktList, WatchedMovie,
+    WatchlistMovie,
 };
 use nextep_core::progress::ProgressItem;
 use nextep_core::sync::{self, ProgressCache};
 use nextep_core::tmdb::{ArtworkCache, Media, Size, TmdbClient};
 use nextep_core::{Error, TraktClient};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use tauri::async_runtime::Mutex;
 
 /// Error string the UI checks for to show the sign-in screen.
@@ -29,6 +31,7 @@ const ARTWORK_FILE: &str = "artwork_cache.json";
 const SNAPSHOT_PREFIX: &str = "snapshot_";
 /// AI provider settings, including the user's API key. Device-only.
 const AI_FILE: &str = "ai_settings.json";
+const ALERTS_FILE: &str = "alerts.json";
 
 /// Switching between tabs reuses a refresh this recent instead of calling
 /// Trakt again.
@@ -72,6 +75,18 @@ pub struct AppState {
     feeds: Mutex<Option<(DateTime<Utc>, Feeds)>>,
     /// Cast and crew of shows, kept between AI picks requests.
     pub people: Mutex<HashMap<u64, ShowPeople>>,
+    /// Followed shows' episodes from the latest refresh.
+    calendar: Mutex<Vec<CalendarEntry>>,
+    alerts: Mutex<AlertSettings>,
+    /// What was last handed to the OS to notify, so an unchanged plan isn't
+    /// scheduled again.
+    scheduled: Mutex<Option<Vec<Alert>>>,
+}
+
+/// New-episode alerts setting, saved on the device.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AlertSettings {
+    pub enabled: bool,
 }
 
 type MovieData = (Vec<WatchedMovie>, Vec<WatchlistMovie>);
@@ -94,6 +109,9 @@ impl AppState {
             movies: Mutex::new(None),
             feeds: Mutex::new(None),
             people: Mutex::new(HashMap::new()),
+            calendar: Mutex::new(Vec::new()),
+            alerts: Mutex::new(read(&dir, ALERTS_FILE).unwrap_or_default()),
+            scheduled: Mutex::new(None),
             dir,
         }
     }
@@ -158,6 +176,7 @@ impl AppState {
         *self.movies.lock().await = None;
         *self.feeds.lock().await = None;
         self.people.lock().await.clear();
+        self.calendar.lock().await.clear();
         for name in [TOKEN_FILE, PROGRESS_FILE, LABELS_FILE] {
             let _ = fs::remove_file(self.dir.join(name));
         }
@@ -215,10 +234,11 @@ impl AppState {
         let now = Utc::now();
         let mut items = {
             let mut cache = self.progress.lock().await;
-            let items = sync::refresh_progress(&client, &mut cache, now, force)
+            let (items, calendar) = sync::refresh_progress(&client, &mut cache, now, force)
                 .await
                 .map_err(to_ui_error)?;
             self.save(PROGRESS_FILE, &*cache)?;
+            *self.calendar.lock().await = calendar;
             items
         };
 
@@ -387,6 +407,40 @@ impl AppState {
     /// Forces the next [`Self::items`] call to ask Trakt again.
     pub async fn invalidate(&self) {
         *self.items.lock().await = None;
+    }
+
+    pub async fn alerts_enabled(&self) -> bool {
+        self.alerts.lock().await.enabled
+    }
+
+    pub async fn set_alerts_enabled(&self, enabled: bool) -> Result<(), String> {
+        let mut alerts = self.alerts.lock().await;
+        alerts.enabled = enabled;
+        self.save(ALERTS_FILE, &*alerts)
+    }
+
+    /// New-episode alerts for the latest refresh (none when they're off).
+    pub async fn alert_plan(&self) -> Vec<Alert> {
+        if !self.alerts_enabled().await {
+            return Vec::new();
+        }
+        let items = self.items.lock().await;
+        let Some((_, items)) = items.as_ref() else {
+            return Vec::new();
+        };
+        let calendar = self.calendar.lock().await;
+        let labels = self.labels.lock().await;
+        alerts::plan(items, &calendar, &labels, Utc::now())
+    }
+
+    /// Records `plan` as scheduled; false if it's what was scheduled last.
+    pub async fn note_scheduled(&self, plan: &[Alert]) -> bool {
+        let mut scheduled = self.scheduled.lock().await;
+        if scheduled.as_deref() == Some(plan) {
+            return false;
+        }
+        *scheduled = Some(plan.to_vec());
+        true
     }
 
     /// Makes the next refresh fetch this show's progress from Trakt.

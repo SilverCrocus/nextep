@@ -1,4 +1,5 @@
-//! Settings page. For now: the AI provider and key for AI picks.
+//! Settings page: new-episode alerts, and the AI provider and key for AI
+//! picks.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -130,6 +131,8 @@ pub fn SettingsPage() -> impl IntoView {
             <div class="details list-page">
                 <h1 class="show-title">"Settings"</h1>
 
+                <Alerts/>
+
                 <h2 class="section">"AI picks"</h2>
                 <p class="hint small">
                     "Describe a mood in Discover and an AI suggests shows or movies for you. "
@@ -226,5 +229,65 @@ pub fn SettingsPage() -> impl IntoView {
                 <p class="version">{move || format!("Nextep v{}", nav.version.get())}</p>
             </div>
         </div>
+    }
+}
+
+#[derive(Clone, Deserialize)]
+struct AlertsView {
+    enabled: bool,
+    permitted: bool,
+}
+
+/// New-episode alerts on or off. Turning them on asks Android for permission.
+#[component]
+fn Alerts() -> impl IntoView {
+    let view = RwSignal::new(None::<AlertsView>);
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    spawn_local(async move {
+        if let Ok(v) = api::call::<AlertsView>("alerts", ()).await {
+            view.set(Some(v));
+        }
+    });
+    let toggle = move |_| {
+        #[derive(Serialize)]
+        struct Args {
+            enabled: bool,
+        }
+        let enabled = !view.with_untracked(|v| v.as_ref().is_some_and(|v| v.enabled));
+        busy.set(true);
+        error.set(None);
+        spawn_local(async move {
+            match api::call::<AlertsView>("set_alerts", Args { enabled }).await {
+                Ok(v) => view.set(Some(v)),
+                Err(e) => error.set(Some(e)),
+            }
+            busy.set(false);
+        });
+    };
+    let on = move || view.with(|v| v.as_ref().is_some_and(|v| v.enabled));
+
+    view! {
+        <h2 class="section">"New episode alerts"</h2>
+        <p class="hint small">
+            "A notification when a new episode of a show you're caught up on airs. "
+            "They're scheduled when Progress refreshes, so open Nextep now and then to keep them coming."
+        </p>
+        <div class="actions">
+            <button class="pill" class:on=on disabled=move || busy.get() || view.with(Option::is_none) on:click=toggle>
+                {move || if on() { "✓ Alerts on" } else { "Turn on alerts" }}
+            </button>
+        </div>
+        {move || {
+            view.with(|v| v.as_ref().is_some_and(|v| v.enabled && !v.permitted))
+                .then(|| {
+                    view! {
+                        <p class="warn">
+                            "Notifications are blocked for Nextep. Allow them in Settings › Apps › Nextep › Notifications."
+                        </p>
+                    }
+                })
+        }}
+        {move || error.get().map(|e| view! { <p class="warn">{e}</p> })}
     }
 }

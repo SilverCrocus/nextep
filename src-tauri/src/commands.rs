@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::notify;
 use crate::state::{AppState, Feeds, to_ui_error};
 use crate::{TMDB_API_KEY, TRAKT_CLIENT_ID};
 
@@ -89,8 +90,10 @@ pub async fn sign_in_poll(
 }
 
 #[tauri::command]
-pub async fn sign_out(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn sign_out(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.sign_out().await;
+    // Nothing to alert about any more.
+    notify::reschedule(&app).await;
     Ok(())
 }
 
@@ -124,6 +127,7 @@ pub async fn check_update() -> Result<Option<Release>, String> {
 /// `cached` returns the last saved result instantly without calling Trakt.
 #[tauri::command]
 pub async fn progress(
+    app: AppHandle,
     state: State<'_, AppState>,
     sort: Option<SortBy>,
     force: Option<bool>,
@@ -132,7 +136,10 @@ pub async fn progress(
     let mut items: Vec<ProgressItem> = if cached.unwrap_or(false) {
         state.snapshot("items")?
     } else {
-        state.items(force.unwrap_or(false)).await?
+        let items = state.items(force.unwrap_or(false)).await?;
+        // Keep new-episode alerts in step with what was just fetched.
+        tauri::async_runtime::spawn(async move { notify::reschedule(&app).await });
+        items
     };
     let labels = state.labels.lock().await;
     items.retain(|i| !labels.is_hidden(i.show.ids.trakt));
@@ -958,6 +965,48 @@ pub async fn discover(
     drop(artwork);
     state.save_snapshot(snapshot, &view);
     Ok(view)
+}
+
+// ---- new-episode alerts -----------------------------------------------------
+
+#[derive(Serialize)]
+pub struct AlertsView {
+    enabled: bool,
+    /// Whether Android lets Nextep post notifications.
+    permitted: bool,
+}
+
+#[tauri::command]
+pub async fn alerts(app: AppHandle, state: State<'_, AppState>) -> Result<AlertsView, String> {
+    Ok(AlertsView {
+        enabled: state.alerts_enabled().await,
+        permitted: notify::permitted(&app).await,
+    })
+}
+
+/// Turns new-episode alerts on (asking Android for permission first) or off.
+#[tauri::command]
+pub async fn set_alerts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<AlertsView, String> {
+    if enabled && !notify::ask_permission(&app).await {
+        return Err(
+            "Android isn't letting Nextep send notifications. Allow them in Settings › Apps › Nextep › Notifications, then try again."
+                .into(),
+        );
+    }
+    state.set_alerts_enabled(enabled).await?;
+    if enabled {
+        // Have something to plan from even if Progress hasn't loaded yet.
+        let _ = state.items(false).await;
+    }
+    notify::reschedule(&app).await;
+    Ok(AlertsView {
+        enabled,
+        permitted: notify::permitted(&app).await,
+    })
 }
 
 // ---- AI picks -----------------------------------------------------------------

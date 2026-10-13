@@ -57,13 +57,14 @@ struct CachedProgress {
 }
 
 /// Fetches what changed and returns one item per watched show, with the next
-/// upcoming episode filled in from the calendar for caught-up shows.
+/// upcoming episode filled in from the calendar for caught-up shows, and the
+/// calendar itself (the past week and the next three).
 pub async fn refresh_progress(
     client: &TraktClient,
     cache: &mut ProgressCache,
     now: DateTime<Utc>,
     force: bool,
-) -> Result<Vec<ProgressItem>> {
+) -> Result<(Vec<ProgressItem>, Vec<CalendarEntry>)> {
     let watched = client.watched_shows().await?;
     let start = (now - Duration::days(CALENDAR_PAST_DAYS)).date_naive();
     let calendar = client.calendar(start, CALENDAR_DAYS).await?;
@@ -108,7 +109,7 @@ pub async fn refresh_progress(
     let watched_ids: HashSet<u64> = entries.keys().copied().collect();
     cache.shows.retain(|id, _| watched_ids.contains(id));
 
-    Ok(watched
+    let items = watched
         .into_iter()
         .filter_map(|w| {
             let id = w.show.ids.trakt?;
@@ -119,7 +120,8 @@ pub async fn refresh_progress(
             }
             Some(item)
         })
-        .collect())
+        .collect();
+    Ok((items, calendar))
 }
 
 /// Whether a show's progress must be fetched again. `force` (pull to

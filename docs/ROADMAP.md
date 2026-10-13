@@ -28,7 +28,7 @@ what gets used daily stays, the rest is cut or deferred.
 - [x] **Lists** on top of Trakt lists (they sync to Stremio's Trakt add-on):
       create, rename, delete, add and remove shows and movies; couchmoney / mdblist
       lists shown read-only as recommendations; "5 of 12 lists" counter
-- [ ] **Discovery** page (Discover tab)
+- [x] **Discovery** page (Discover tab)
   - [x] "Because you watched …" rows (Trakt related shows for the last three)
   - [x] "Recommended by Trakt" (personalised recommendations)
   - [x] Trending
@@ -54,7 +54,10 @@ what gets used daily stays, the rest is cut or deferred.
       and Library (watched / watchlist), movie pages (mark watched,
       watchlist, where to watch, director and cast), movies in Search, and
       watchlist releases in Calendar
-- [ ] New-episode notifications
+- [x] New-episode alerts: a notification when a new episode of a show
+      you're caught up on airs (on hold / dropped left out), turned on in
+      Settings. Scheduled with Android's alarm manager from the calendar
+      whenever Progress refreshes, so they fire with the app closed
 - [ ] Home-screen widget
 
 ## Done from "Later"
